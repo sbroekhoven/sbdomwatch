@@ -31,11 +31,13 @@ config:
 		mv .env.tmp .env && echo "generated SBDOMWATCH_TOKEN in .env"; \
 	fi
 
+# The image build fetches the private domping module with a GitHub token,
+# taken from GITHUB_TOKEN or else from the GitHub CLI.
 docker: config
-	SBDOMWATCH_VERSION=$(VERSION) docker compose build
+	GITHUB_TOKEN=$${GITHUB_TOKEN:-$$(gh auth token)} SBDOMWATCH_VERSION=$(VERSION) docker compose build
 
 up: config
-	SBDOMWATCH_VERSION=$(VERSION) docker compose up --build
+	GITHUB_TOKEN=$${GITHUB_TOKEN:-$$(gh auth token)} SBDOMWATCH_VERSION=$(VERSION) docker compose up --build
 
 down:
 	docker compose down

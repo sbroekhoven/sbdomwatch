@@ -4,6 +4,7 @@ services:
       context: .
       args:
         VERSION: ${SBDOMWATCH_VERSION:-dev}
+      secrets: [github_token]   # for the private domping module
     image: sbdomwatch:${SBDOMWATCH_VERSION:-dev}
     command: ["serve"]
     restart: unless-stopped
@@ -21,3 +22,7 @@ services:
 
 volumes:
   sbdomwatch-data:
+
+secrets:
+  github_token:
+    environment: GITHUB_TOKEN   # build time only; make docker uses `gh auth token`
