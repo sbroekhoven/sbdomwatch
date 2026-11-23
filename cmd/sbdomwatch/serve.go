@@ -1,16 +1,22 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"math"
 	"os"
 
 	"github.com/spf13/cobra"
 
 	"github.com/sbroekhoven/sbdomwatch/internal/api"
+	"github.com/sbroekhoven/sbdomwatch/internal/check"
+	dnscheck "github.com/sbroekhoven/sbdomwatch/internal/check/dns"
 	"github.com/sbroekhoven/sbdomwatch/internal/config"
+	"github.com/sbroekhoven/sbdomwatch/internal/ratelimit"
+	"github.com/sbroekhoven/sbdomwatch/internal/sched"
 	"github.com/sbroekhoven/sbdomwatch/internal/store"
 )
 
@@ -40,7 +46,15 @@ func (a *app) serveCmd() *cobra.Command {
 			}
 			defer st.Close()
 			srv := api.New(cfg.Listen, api.Deps{Store: st, Token: cfg.Token, Defaults: cfg.WatchDefaults(), Log: log})
-			if err := srv.Run(ctx); err != nil {
+			dnsLimiter := ratelimit.New(cfg.RateLimits.DNSPerSec, int(math.Ceil(cfg.RateLimits.DNSPerSec)), nil)
+			sc := sched.New(sched.Config{
+				Store:   st,
+				Checks:  []check.Check{dnscheck.New(dnscheck.Config{Resolvers: cfg.Resolvers, Limiter: dnsLimiter})},
+				Log:     log.With("component", "scheduler"),
+				Workers: cfg.Scheduler.Workers,
+				Tick:    cfg.Scheduler.Tick,
+			})
+			if err := runAll(ctx, srv.Run, sc.Run); err != nil {
 				return err
 			}
 			log.InfoContext(ctx, "stopped")
@@ -49,6 +63,25 @@ func (a *app) serveCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&configPath, "config", "", "config file (env "+config.EnvConfig+", default "+config.DefaultConfig+" if it exists)")
 	return cmd
+}
+
+// runAll runs every fn until ctx is cancelled or one of them returns, then
+// cancels the rest and returns the first error.
+func runAll(ctx context.Context, fns ...func(context.Context) error) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	errc := make(chan error, len(fns))
+	for _, fn := range fns {
+		go func() { errc <- fn(ctx) }()
+	}
+	var first error
+	for range fns {
+		if err := <-errc; err != nil && first == nil {
+			first = err
+		}
+		cancel()
+	}
+	return first
 }
 
 // resolveConfigPath picks the config file: the flag, then the environment,

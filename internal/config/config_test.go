@@ -79,6 +79,8 @@ func TestLoad(t *testing.T) {
 		{name: "missing token", env: map[string]string{EnvToken: ""}, wantErr: "SBDOMWATCH_TOKEN must be set"},
 		{name: "short token", env: map[string]string{EnvToken: "short"}, wantErr: "at least 32"},
 		{name: "short candidate ttl", file: "defaults:\n  candidate_ttl: 1h\n", wantErr: "candidate_ttl"},
+		{name: "bad workers", file: "scheduler:\n  workers: 0\n", wantErr: "scheduler.workers"},
+		{name: "bad tick", file: "scheduler:\n  tick: 10ms\n", wantErr: "scheduler.tick"},
 		{name: "unknown key", file: "lisen: \":1\"\n", wantErr: "lisen"},
 		{name: "token in file", file: "token: abc\n", wantErr: "token looks like a secret"},
 		{name: "nested secret in file", file: "sinks:\n  discord:\n    webhook: https://x\n", wantErr: "sinks.discord.webhook looks like a secret"},

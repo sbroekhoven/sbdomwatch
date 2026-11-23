@@ -39,6 +39,7 @@ type Server struct {
 	Resolvers  []string   `yaml:"resolvers"`
 	RateLimits RateLimits `yaml:"rate_limits"`
 	Defaults   Defaults   `yaml:"defaults"`
+	Scheduler  Scheduler  `yaml:"scheduler"`
 	Sinks      Sinks      `yaml:"sinks"`
 	LogLevel   string     `yaml:"log_level"`
 
@@ -51,6 +52,12 @@ type Server struct {
 type RateLimits struct {
 	DNSPerSec             float64 `yaml:"dns_per_sec"`
 	RDAPPerSecPerRegistry float64 `yaml:"rdap_per_sec_per_registry"`
+}
+
+// Scheduler tunes the check loop.
+type Scheduler struct {
+	Workers int           `yaml:"workers"` // watches checked concurrently
+	Tick    time.Duration `yaml:"tick"`    // how often to look for due watches
 }
 
 // Defaults are applied to new watches.
@@ -100,8 +107,9 @@ func Default() Server {
 			},
 			CandidateTTL: 90 * 24 * time.Hour,
 		},
-		Sinks:    Sinks{Discord: DiscordSink{WebhookEnv: "SBDOMWATCH_DISCORD_WEBHOOK"}},
-		LogLevel: "info",
+		Scheduler: Scheduler{Workers: 8, Tick: 5 * time.Second},
+		Sinks:     Sinks{Discord: DiscordSink{WebhookEnv: "SBDOMWATCH_DISCORD_WEBHOOK"}},
+		LogLevel:  "info",
 	}
 }
 
@@ -220,6 +228,12 @@ func (c Server) Validate() error {
 		if d < time.Minute {
 			errs = append(errs, fmt.Errorf("defaults.intervals.%s must be >= 1m", name))
 		}
+	}
+	if c.Scheduler.Workers < 1 || c.Scheduler.Workers > 64 {
+		errs = append(errs, errors.New("scheduler.workers must be between 1 and 64"))
+	}
+	if c.Scheduler.Tick < time.Second || c.Scheduler.Tick > 5*time.Minute {
+		errs = append(errs, errors.New("scheduler.tick must be between 1s and 5m"))
 	}
 	if c.Defaults.CandidateTTL < 24*time.Hour {
 		errs = append(errs, errors.New("defaults.candidate_ttl must be >= 24h"))

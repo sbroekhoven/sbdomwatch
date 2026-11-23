@@ -240,6 +240,9 @@ defaults:
     candidate: 6h
     third-party: 6h
   candidate_ttl: 2160h      # 90 days
+scheduler:
+  workers: 8
+  tick: 5s
 sinks:
   discord:
     webhook_env: SBDOMWATCH_DISCORD_WEBHOOK
