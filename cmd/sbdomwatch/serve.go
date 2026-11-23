@@ -16,6 +16,7 @@ import (
 	"github.com/sbroekhoven/sbdomwatch/internal/api"
 	"github.com/sbroekhoven/sbdomwatch/internal/check"
 	dnscheck "github.com/sbroekhoven/sbdomwatch/internal/check/dns"
+	rdapcheck "github.com/sbroekhoven/sbdomwatch/internal/check/rdap"
 	"github.com/sbroekhoven/sbdomwatch/internal/config"
 	"github.com/sbroekhoven/sbdomwatch/internal/diff"
 	"github.com/sbroekhoven/sbdomwatch/internal/events"
@@ -59,9 +60,12 @@ func (a *app) serveCmd() *cobra.Command {
 				Log:   log.With("component", "outbox"),
 			})
 			sc := sched.New(sched.Config{
-				Store:      st,
-				Checks:     []check.Check{dnscheck.New(dnscheck.Config{Resolvers: cfg.Resolvers, Limiter: dnsLimiter})},
-				Extractors: map[string]diff.Extractor{dnscheck.Name: dnscheck.Facts},
+				Store: st,
+				Checks: []check.Check{
+					dnscheck.New(dnscheck.Config{Resolvers: cfg.Resolvers, Limiter: dnsLimiter}),
+					rdapcheck.New(rdapcheck.NewClient(cfg.RateLimits.RDAPPerSecPerRegistry, "sbdomwatch/"+a.version), nil),
+				},
+				Extractors: map[string]diff.Extractor{dnscheck.Name: dnscheck.Facts, rdapcheck.Name: rdapcheck.Facts},
 				Lifecycle: watch.LifecycleConfig{
 					BaselineObservations: cfg.Defaults.BaselineObservations,
 					Debounce:             cfg.Defaults.DebounceObservations,

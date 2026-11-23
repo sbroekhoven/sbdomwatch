@@ -60,6 +60,8 @@ Clients create watches through the API. The scheduler runs due checks, the diff 
 
 - **Scheduler:** picks watches whose `next_check_at` has passed, adaptive interval with jitter, per-upstream rate limits (RDAP per registry, DNS per resolver).
 - **Checks:** a small interface, `Check{Name(); Run(ctx, domain) (Observation, error)}`. v1 has DNS and RDAP; RDAP wraps the existing domping library.
+    - RDAP uses `github.com/sbroekhoven/domping/rdap` (v0.2.0+), looks up the registrable domain of a watch, and spaces requests per RDAP server with `rdap_per_sec_per_registry`. Facts: `rdap.registered`, `rdap.registrar` (by IANA ID, name as fallback), `rdap.nameservers`, `rdap.status`. Dates are stored but not compared.
+    - RDAP "registered" overrides DNS NXDOMAIN when deciding whether a domain exists. A first registration skips debounce and carries the new registrar, nameservers and status as details; `dropped` is debounced. Nameservers appearing where there were none are `record_added`, not `ns_changed`.
 - **Diff engine:** compares sets, not lists; ignores TTL and ordering; learns volatile fields during baselining; needs 2 to 3 consecutive observations before it emits a change.
     - Each check turns its data into facts: a field path (`dns.MX`) with a set of values. A lookup that failed is *unknown*: never a change, and it neither advances nor resets the debounce. NXDOMAIN is a known empty set.
     - A field whose values differ between baseline observations is volatile and ignored completely (for example round-robin A records). A stricter "pool" mode, alerting only on values never seen during baselining, is a candidate for later.
@@ -283,6 +285,8 @@ volumes:
 ```
 
 **Container image**
+
+domping is a private module, so the image build needs a GitHub token as a BuildKit secret (`github_token`, from `GITHUB_TOKEN`; `make docker` falls back to `gh auth token`). It is only in the environment of the `go mod download` step, never in a layer. Locally, `GOPRIVATE=github.com/sbroekhoven/*` must be set.
 
 Multi-stage build: a `golang` builder compiles a static binary (`CGO_ENABLED=0`, `-trimpath`), and the runtime stage is a pinned `alpine` image with `ca-certificates` and `tzdata`, a non-root `sbdomwatch` user, and `/data` owned by that user. Alpine over distroless because the busybox shell and `wget` allow a Docker `HEALTHCHECK` against `/healthz` and basic debugging with `docker exec`, for a few MB more.
 

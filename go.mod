@@ -4,6 +4,7 @@ go 1.27.1
 
 require (
 	github.com/miekg/dns v1.1.73
+	github.com/sbroekhoven/domping v0.2.0
 	github.com/spf13/cobra v1.10.2
 	go.yaml.in/yaml/v3 v3.0.6
 	golang.org/x/net v0.62.0
