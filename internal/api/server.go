@@ -9,43 +9,99 @@ import (
 	"net"
 	"net/http"
 	"time"
+
+	"github.com/sbroekhoven/sbdomwatch/internal/watch"
 )
 
 const shutdownTimeout = 10 * time.Second
 
+// Deps are the server's collaborators.
+type Deps struct {
+	Store    Store
+	Token    string // bearer token for /v1; never logged
+	Defaults watch.Defaults
+	Log      *slog.Logger
+}
+
 // Server is the HTTP API server.
 type Server struct {
-	log  *slog.Logger
-	http *http.Server
+	log      *slog.Logger
+	store    Store
+	token    string
+	defaults watch.Defaults
+	http     *http.Server
 }
 
 // New returns a server that will listen on addr.
-func New(addr string, log *slog.Logger) *Server {
-	s := &Server{log: log}
+func New(addr string, d Deps) *Server {
+	s := &Server{log: d.Log, store: d.Store, token: d.Token, defaults: d.Defaults}
 	s.http = &http.Server{
 		Addr:              addr,
 		Handler:           s.Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
-		ReadTimeout:       15 * time.Second,
-		WriteTimeout:      30 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      60 * time.Second,
 		IdleTimeout:       60 * time.Second,
 		MaxHeaderBytes:    1 << 16,
-		ErrorLog:          slog.NewLogLogger(log.Handler(), slog.LevelWarn),
+		ErrorLog:          slog.NewLogLogger(d.Log.Handler(), slog.LevelWarn),
 	}
 	return s
 }
 
-// Handler returns the routes of the API.
+// Handler returns the routes of the API with logging and panic recovery.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", handleHealthz)
-	return mux
+	s.routes(mux)
+	return s.recoverer(s.logRequests(mux))
 }
 
 func handleHealthz(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
 	_, _ = w.Write([]byte(`{"status":"ok"}` + "\n"))
+}
+
+type statusRecorder struct {
+	http.ResponseWriter
+	status int
+}
+
+func (r *statusRecorder) WriteHeader(code int) {
+	r.status = code
+	r.ResponseWriter.WriteHeader(code)
+}
+
+// logRequests logs every /v1 request. Headers are not logged, so the token
+// never reaches the logs.
+func (s *Server) logRequests(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/healthz" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		start := time.Now()
+		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+		next.ServeHTTP(rec, r)
+		s.log.InfoContext(r.Context(), "request",
+			"method", r.Method, "path", r.URL.Path, "status", rec.status,
+			"duration_ms", time.Since(start).Milliseconds(), "actor", r.Header.Get(HeaderActor))
+	})
+}
+
+func (s *Server) recoverer(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() {
+			if v := recover(); v != nil {
+				if v == http.ErrAbortHandler {
+					panic(v)
+				}
+				s.log.ErrorContext(r.Context(), "panic in handler", "method", r.Method, "path", r.URL.Path, "panic", fmt.Sprint(v))
+				writeError(w, http.StatusInternalServerError, CodeInternal, "internal error", nil)
+			}
+		}()
+		next.ServeHTTP(w, r)
+	})
 }
 
 // Run listens on the configured address and serves until ctx is cancelled.

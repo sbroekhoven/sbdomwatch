@@ -13,8 +13,8 @@ import (
 
 func discard() *slog.Logger { return slog.New(slog.DiscardHandler) }
 
-func TestHandler(t *testing.T) {
-	h := New(":0", discard()).Handler()
+func TestHealthz(t *testing.T) {
+	h := New(":0", Deps{Log: discard()}).Handler()
 	tests := []struct {
 		method, path string
 		wantStatus   int
@@ -45,7 +45,7 @@ func TestServeShutsDownOnCancel(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(t.Context())
-	s := New(ln.Addr().String(), discard())
+	s := New(ln.Addr().String(), Deps{Log: discard()})
 	done := make(chan error, 1)
 	go func() { done <- s.Serve(ctx, ln) }()
 
@@ -71,7 +71,7 @@ func TestServeShutsDownOnCancel(t *testing.T) {
 }
 
 func TestRunListenError(t *testing.T) {
-	if err := New("256.0.0.1:1", discard()).Run(t.Context()); err == nil {
+	if err := New("256.0.0.1:1", Deps{Log: discard()}).Run(t.Context()); err == nil {
 		t.Fatal("want listen error")
 	}
 }

@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"go.yaml.in/yaml/v3"
+
+	"github.com/sbroekhoven/sbdomwatch/internal/watch"
 )
 
 // Environment variable names.
@@ -25,6 +27,9 @@ const (
 	EnvToken      = "SBDOMWATCH_TOKEN"
 	EnvURL        = "SBDOMWATCH_URL"
 	DefaultConfig = "/etc/sbdomwatch/config.yaml"
+
+	// MinTokenLen is the shortest accepted API token.
+	MinTokenLen = 32
 )
 
 // Server is the configuration of `sbdomwatch serve`.
@@ -54,6 +59,7 @@ type Defaults struct {
 	BaselineGap          time.Duration `yaml:"baseline_gap"`
 	DebounceObservations int           `yaml:"debounce_observations"`
 	Intervals            Intervals     `yaml:"intervals"`
+	CandidateTTL         time.Duration `yaml:"candidate_ttl"`
 }
 
 // Intervals is the check interval per watch template.
@@ -92,6 +98,7 @@ func Default() Server {
 				Candidate:  6 * time.Hour,
 				ThirdParty: 6 * time.Hour,
 			},
+			CandidateTTL: 90 * 24 * time.Hour,
 		},
 		Sinks:    Sinks{Discord: DiscordSink{WebhookEnv: "SBDOMWATCH_DISCORD_WEBHOOK"}},
 		LogLevel: "info",
@@ -211,6 +218,12 @@ func (c Server) Validate() error {
 			errs = append(errs, fmt.Errorf("defaults.intervals.%s must be >= 1m", name))
 		}
 	}
+	if c.Defaults.CandidateTTL < 24*time.Hour {
+		errs = append(errs, errors.New("defaults.candidate_ttl must be >= 24h"))
+	}
+	if len(c.Token) < MinTokenLen {
+		errs = append(errs, fmt.Errorf("%s must be set to at least %d characters (try: openssl rand -hex 32)", EnvToken, MinTokenLen))
+	}
 	if w := c.Sinks.Discord.WebhookEnv; w != "" && !envKeyRE.MatchString(w) {
 		errs = append(errs, fmt.Errorf("sinks.discord.webhook_env %q is not a valid variable name", w))
 	}
@@ -218,6 +231,18 @@ func (c Server) Validate() error {
 		errs = append(errs, err)
 	}
 	return errors.Join(errs...)
+}
+
+// WatchDefaults returns the defaults for new watches.
+func (c Server) WatchDefaults() watch.Defaults {
+	return watch.Defaults{
+		Intervals: map[watch.Template]time.Duration{
+			watch.TemplateOwned:      c.Defaults.Intervals.Owned,
+			watch.TemplateCandidate:  c.Defaults.Intervals.Candidate,
+			watch.TemplateThirdParty: c.Defaults.Intervals.ThirdParty,
+		},
+		CandidateTTL: c.Defaults.CandidateTTL,
+	}
 }
 
 // ParseLevel maps a log_level string to a slog level.

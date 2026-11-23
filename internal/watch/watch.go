@@ -206,7 +206,7 @@ func (r AddRequest) Normalize() (AddRequest, error) {
 	if len(r.Tags) > 0 {
 		out.Tags = make(map[string]string, len(r.Tags))
 		for k, v := range r.Tags {
-			if err := validateTag(k, v); err != nil {
+			if err := ValidateTag(k, v); err != nil {
 				ve.add("tags."+k, "%v", err)
 			}
 			out.Tags[k] = strings.TrimSpace(v)
@@ -242,7 +242,7 @@ func (p PatchRequest) Validate() error {
 		if v != nil {
 			val = *v
 		}
-		if err := validateTag(k, val); err != nil {
+		if err := ValidateTag(k, val); err != nil {
 			ve.add("tags."+k, "%v", err)
 		}
 	}
@@ -268,7 +268,8 @@ func validateInterval(sec int) error {
 	return nil
 }
 
-func validateTag(k, v string) error {
+// ValidateTag checks one tag key and value.
+func ValidateTag(k, v string) error {
 	if !tagKeyRE.MatchString(k) {
 		return errors.New("key must match [a-z0-9][a-z0-9_.-]{0,62}")
 	}

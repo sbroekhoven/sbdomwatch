@@ -11,6 +11,7 @@ import (
 
 	"github.com/sbroekhoven/sbdomwatch/internal/api"
 	"github.com/sbroekhoven/sbdomwatch/internal/config"
+	"github.com/sbroekhoven/sbdomwatch/internal/store"
 )
 
 func (a *app) serveCmd() *cobra.Command {
@@ -33,7 +34,13 @@ func (a *app) serveCmd() *cobra.Command {
 
 			ctx := cmd.Context()
 			log.InfoContext(ctx, "starting sbdomwatch", "version", a.version, "config_file", path, "config", cfg)
-			if err := api.New(cfg.Listen, log).Run(ctx); err != nil {
+			st, err := store.Open(ctx, cfg.DBPath, store.Options{})
+			if err != nil {
+				return err
+			}
+			defer st.Close()
+			srv := api.New(cfg.Listen, api.Deps{Store: st, Token: cfg.Token, Defaults: cfg.WatchDefaults(), Log: log})
+			if err := srv.Run(ctx); err != nil {
 				return err
 			}
 			log.InfoContext(ctx, "stopped")

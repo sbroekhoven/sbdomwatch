@@ -10,8 +10,19 @@ import (
 	"time"
 )
 
+const testToken = "0123456789abcdef0123456789abcdef"
+
+// envMap returns a lookup over m that supplies a valid token unless m sets one.
 func envMap(m map[string]string) func(string) string {
-	return func(k string) string { return m[k] }
+	return func(k string) string {
+		if v, ok := m[k]; ok {
+			return v
+		}
+		if k == EnvToken {
+			return testToken
+		}
+		return ""
+	}
 }
 
 func writeFile(t *testing.T, content string) string {
@@ -57,14 +68,17 @@ func TestLoad(t *testing.T) {
 		{
 			name: "env overrides file and supplies secrets",
 			file: "listen: \":9000\"\nsinks:\n  discord:\n    webhook_env: MY_HOOK\n",
-			env:  map[string]string{EnvListen: ":9100", EnvToken: "t0ken", "MY_HOOK": "https://hook"},
+			env:  map[string]string{EnvListen: ":9100", EnvToken: testToken + "x", "MY_HOOK": "https://hook"},
 			check: func(t *testing.T, c Server) {
-				if c.Listen != ":9100" || c.Token != "t0ken" || c.DiscordWebhook != "https://hook" {
+				if c.Listen != ":9100" || c.Token != testToken+"x" || c.DiscordWebhook != "https://hook" {
 					t.Errorf("env not applied: listen=%q token_set=%v hook_set=%v", c.Listen, c.Token != "", c.DiscordWebhook != "")
 				}
 			},
 		},
 		{name: "empty file", file: "", check: func(t *testing.T, c Server) {}},
+		{name: "missing token", env: map[string]string{EnvToken: ""}, wantErr: "SBDOMWATCH_TOKEN must be set"},
+		{name: "short token", env: map[string]string{EnvToken: "short"}, wantErr: "at least 32"},
+		{name: "short candidate ttl", file: "defaults:\n  candidate_ttl: 1h\n", wantErr: "candidate_ttl"},
 		{name: "unknown key", file: "lisen: \":1\"\n", wantErr: "lisen"},
 		{name: "token in file", file: "token: abc\n", wantErr: "token looks like a secret"},
 		{name: "nested secret in file", file: "sinks:\n  discord:\n    webhook: https://x\n", wantErr: "sinks.discord.webhook looks like a secret"},

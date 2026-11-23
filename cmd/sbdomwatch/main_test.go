@@ -87,9 +87,10 @@ func (b *syncBuffer) String() string {
 }
 
 func TestServe(t *testing.T) {
-	const secret = "tok-from-dotenv-123"
+	const secret = "tok-from-dotenv-0123456789abcdef0123"
 	envFile := writeTemp(t, ".env", "SBDOMWATCH_TOKEN="+secret+"\n")
-	cfg := writeTemp(t, "config.yaml", "listen: \"127.0.0.1:0\"\n")
+	db := filepath.Join(t.TempDir(), "serve.db")
+	cfg := writeTemp(t, "config.yaml", "listen: \"127.0.0.1:0\"\ndb_path: \""+db+"\"\n")
 
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
