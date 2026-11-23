@@ -147,3 +147,48 @@ func TestPausedIsUntouched(t *testing.T) {
 		}
 	}
 }
+
+func TestRegistrationFiresImmediatelyWithDetails(t *testing.T) {
+	w := newWatch()
+	w.State, w.Template = StateActive, TemplateCandidate
+	st := diff.State{Baseline: map[string][]string{
+		"rdap.registered": {"false"}, "rdap.registrar": {}, "rdap.nameservers": {}, "rdap.status": {},
+		"dns.NS": {}, "dns.MX": {},
+	}}
+	f := facts(
+		"rdap.registered", []string{"true"}, "rdap.registrar", []string{"iana:1234"},
+		"rdap.nameservers", []string{"ns1.evil.example"}, "rdap.status", []string{"active"},
+		"dns.NS", []string{"ns1.evil.example"}, "dns.MX", []string{},
+	)
+	out := Observe(w, st, f, lc, t0) // debounce 2, yet this is the first sighting
+	if len(out.Events) != 1 || out.Events[0].Type != events.Registered || out.Events[0].Severity != events.High {
+		t.Fatalf("events = %+v, want only registered", out.Events)
+	}
+	if d := out.Events[0].Payload.Details; len(d) != 3 {
+		t.Errorf("details = %+v, want registrar, nameservers and status", d)
+	}
+	// DNS follows the normal debounce: NS appears as record_added next round.
+	out = Observe(out.Watch, out.Diff, f, lc, t0.Add(time.Hour))
+	if len(out.Events) != 1 || out.Events[0].Type != events.RecordAdded || out.Events[0].Payload.Change.Path != "dns.NS" {
+		t.Fatalf("second round events = %+v", out.Events)
+	}
+	out = Observe(out.Watch, out.Diff, f, lc, t0.Add(2*time.Hour))
+	if len(out.Events) != 0 {
+		t.Errorf("third round repeated events: %+v", out.Events)
+	}
+}
+
+func TestDropIsDebounced(t *testing.T) {
+	w := newWatch()
+	w.State = StateActive
+	st := diff.State{Baseline: map[string][]string{"rdap.registered": {"true"}, "rdap.registrar": {"iana:1"}}}
+	gone := facts("rdap.registered", []string{"false"}, "rdap.registrar", []string{})
+	out := Observe(w, st, gone, lc, t0)
+	if len(out.Events) != 0 {
+		t.Fatalf("drop fired without debounce: %+v", out.Events)
+	}
+	out = Observe(out.Watch, out.Diff, gone, lc, t0)
+	if len(out.Events) != 1 || out.Events[0].Type != events.Dropped || len(out.Events[0].Payload.Details) != 1 {
+		t.Fatalf("events = %+v", out.Events)
+	}
+}

@@ -21,6 +21,10 @@ func TestMerge(t *testing.T) {
 	if len(f.Values) != 2 || !f.Absent {
 		t.Errorf("Merge = %+v", f)
 	}
+	// RDAP says registered: DNS NXDOMAIN does not make it absent.
+	if f := Merge(Facts{Absent: true}, Facts{Exists: true}); f.Absent || !f.Exists {
+		t.Errorf("Exists must override Absent: %+v", f)
+	}
 }
 
 func TestLearn(t *testing.T) {
@@ -105,7 +109,7 @@ func TestCompareDebounce(t *testing.T) {
 	}
 	for _, s := range steps {
 		var changes []Change
-		st, changes = Compare(st, s.facts, []string{"dns.A"}, 2)
+		st, changes = Compare(st, s.facts, CompareOptions{Volatile: []string{"dns.A"}, Debounce: 2})
 		var got []string
 		for _, c := range changes {
 			got = append(got, c.Path+":"+string(c.Kind))
@@ -124,7 +128,7 @@ func TestCompareDebounce(t *testing.T) {
 
 func TestCompareChangeDetail(t *testing.T) {
 	st := State{Baseline: m{"dns.A": {"1", "2"}}}
-	_, ch := Compare(st, m{"dns.A": {"2", "3"}}, nil, 1)
+	_, ch := Compare(st, m{"dns.A": {"2", "3"}}, CompareOptions{Debounce: 1})
 	if len(ch) != 1 {
 		t.Fatalf("changes = %v", ch)
 	}
@@ -137,8 +141,22 @@ func TestCompareChangeDetail(t *testing.T) {
 
 func TestCompareDoesNotModifyInput(t *testing.T) {
 	st := State{Baseline: m{"a": {"1"}}, Pending: map[string]Pending{"a": {Values: []string{"2"}, Count: 1}}}
-	Compare(st, m{"a": {"2"}}, nil, 2)
+	Compare(st, m{"a": {"2"}}, CompareOptions{Debounce: 2})
 	if st.Pending["a"].Count != 1 || st.Baseline["a"][0] != "1" {
 		t.Errorf("input modified: %+v", st)
+	}
+}
+
+func TestCompareImmediate(t *testing.T) {
+	st := State{Baseline: m{"rdap.registered": {"false"}, "dns.NS": {"a"}}}
+	imm := func(path string, before, after []string) bool {
+		return path == "rdap.registered" && slices.Equal(after, []string{"true"})
+	}
+	st, ch := Compare(st, m{"rdap.registered": {"true"}, "dns.NS": {"b"}}, CompareOptions{Debounce: 2, Immediate: imm})
+	if len(ch) != 1 || ch[0].Path != "rdap.registered" {
+		t.Fatalf("changes = %+v, want only the immediate one", ch)
+	}
+	if _, pending := st.Pending["dns.NS"]; !pending {
+		t.Error("other paths must still be debounced")
 	}
 }

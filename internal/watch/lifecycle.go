@@ -2,6 +2,8 @@ package watch
 
 import (
 	"maps"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/sbroekhoven/sbdomwatch/internal/diff"
@@ -67,16 +69,55 @@ func Observe(w Watch, st diff.State, facts diff.Facts, cfg LifecycleConfig, now 
 
 	case StateActive:
 		var changes []diff.Change
-		out.Diff, changes = diff.Compare(st, facts.Values, w.VolatileFields, cfg.Debounce)
+		out.Diff, changes = diff.Compare(st, facts.Values, diff.CompareOptions{
+			Volatile:  w.VolatileFields,
+			Debounce:  cfg.Debounce,
+			Immediate: registering(st, facts),
+		})
+		owned := w.Template == TemplateOwned
+		changes, folded := foldRegistration(changes)
 		for _, c := range changes {
-			typ, sev := events.ForChange(c, w.Template == TemplateOwned)
+			typ, sev := events.ForChange(c, owned)
 			p := payload(w)
 			p.Change = &c
+			if c.Path == events.PathRegistered {
+				p.Details = folded
+			}
 			out.Events = append(out.Events, events.Event{Type: typ, Severity: sev, OccurredAt: now, Payload: p})
 		}
 	}
 	out.Watch = w
 	return out
+}
+
+// registering returns the Immediate rule for diff.Compare: when RDAP now
+// shows an unregistered domain as registered, every RDAP field is accepted
+// at once, so registered fires immediately (as the plan wants) and carries
+// the new registrar and nameservers.
+func registering(st diff.State, f diff.Facts) func(path string, before, after []string) bool {
+	on := slices.Equal(st.Baseline[events.PathRegistered], []string{"false"}) &&
+		slices.Equal(f.Values[events.PathRegistered], []string{"true"})
+	return func(path string, _, _ []string) bool {
+		return on && strings.HasPrefix(path, "rdap.")
+	}
+}
+
+// foldRegistration moves other RDAP changes of the same round into the
+// details of a registered or dropped event: a new registrar and
+// nameservers are part of the registration, not separate news.
+func foldRegistration(changes []diff.Change) (kept, folded []diff.Change) {
+	reg := slices.ContainsFunc(changes, func(c diff.Change) bool { return c.Path == events.PathRegistered })
+	if !reg {
+		return changes, nil
+	}
+	for _, c := range changes {
+		if c.Path != events.PathRegistered && strings.HasPrefix(c.Path, "rdap.") {
+			folded = append(folded, c)
+			continue
+		}
+		kept = append(kept, c)
+	}
+	return kept, folded
 }
 
 func payload(w Watch) events.Payload {

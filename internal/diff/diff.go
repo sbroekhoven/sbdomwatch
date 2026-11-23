@@ -20,18 +20,26 @@ type Facts struct {
 	Values map[string][]string
 	// Absent is true when the domain does not exist according to the data.
 	Absent bool
+	// Exists is true when an authoritative source (RDAP) says the domain
+	// is registered; it overrides Absent from other sources.
+	Exists bool
 }
 
 // Extractor turns one check's observation data into facts.
 type Extractor func(data json.RawMessage) (Facts, error)
 
 // Merge combines facts from several checks. Paths must not overlap; each
-// check prefixes its own.
+// check prefixes its own. The result is absent when some check says so and
+// none says the domain exists.
 func Merge(fs ...Facts) Facts {
 	out := Facts{Values: map[string][]string{}}
 	for _, f := range fs {
 		maps.Copy(out.Values, f.Values)
 		out.Absent = out.Absent || f.Absent
+		out.Exists = out.Exists || f.Exists
+	}
+	if out.Exists {
+		out.Absent = false
 	}
 	return out
 }
@@ -106,13 +114,23 @@ func Learn(samples []map[string][]string) (baseline map[string][]string, volatil
 	return baseline, volatile
 }
 
+// CompareOptions tune Compare.
+type CompareOptions struct {
+	Volatile []string // paths to ignore
+	Debounce int      // consecutive observations before a change is accepted
+	// Immediate, when set, accepts a change without debounce if it
+	// returns true (e.g. a first registration).
+	Immediate func(path string, before, after []string) bool
+}
+
 // Compare checks facts against the baseline. A difference becomes a Change
-// once the same new values were seen in debounce consecutive observations;
+// once the same new values were seen in Debounce consecutive observations;
 // the baseline then moves to the new values so the change is reported once.
 // Volatile paths are ignored. A path seen for the first time is adopted
 // into the baseline without a change.
-func Compare(st State, facts map[string][]string, volatile []string, debounce int) (State, []Change) {
-	debounce = max(debounce, 1)
+func Compare(st State, facts map[string][]string, o CompareOptions) (State, []Change) {
+	debounce := max(o.Debounce, 1)
+	volatile := o.Volatile
 	out := State{Baseline: maps.Clone(st.Baseline), Pending: maps.Clone(st.Pending)}
 	if out.Baseline == nil {
 		out.Baseline = map[string][]string{}
@@ -142,7 +160,7 @@ func Compare(st State, facts map[string][]string, volatile []string, debounce in
 		} else {
 			p = Pending{Values: now, Count: 1}
 		}
-		if p.Count < debounce {
+		if p.Count < debounce && (o.Immediate == nil || !o.Immediate(path, base, now)) {
 			out.Pending[path] = p
 			continue
 		}

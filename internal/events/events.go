@@ -4,7 +4,6 @@
 package events
 
 import (
-	"strings"
 	"time"
 
 	"github.com/sbroekhoven/sbdomwatch/internal/diff"
@@ -55,6 +54,9 @@ type Payload struct {
 
 	// Change is set for change events.
 	Change *diff.Change `json:"change,omitempty"`
+	// Details are related changes folded into this event, e.g. the new
+	// registrar and nameservers of a registered event.
+	Details []diff.Change `json:"details,omitempty"`
 
 	// Inventory and VolatileFields are set for baseline_complete.
 	Inventory      map[string][]string `json:"inventory,omitempty"`
@@ -121,18 +123,29 @@ type Delivery struct {
 	Attempts int // failed attempts so far
 }
 
+// Field paths with their own event types.
+const (
+	PathRegistered  = "rdap.registered"  // ["true"] or ["false"]
+	PathRegistrar   = "rdap.registrar"   //
+	PathNameservers = "rdap.nameservers" // delegation at the registry
+	PathDNSNS       = "dns.NS"
+	PathDNSMX       = "dns.MX"
+)
+
 // ForChange maps a diff change to an event type and severity. owned raises
-// the severity of nameserver changes.
+// the severity of nameserver changes. Nameservers appearing where there
+// were none (a new registration) are record_added, not ns_changed.
 func ForChange(c diff.Change, owned bool) (Type, Severity) {
-	field := c.Path
-	if i := strings.LastIndexByte(field, '.'); i >= 0 {
-		field = field[i+1:]
-	}
-	isDNS := strings.HasPrefix(c.Path, "dns.")
 	switch {
-	case isDNS && field == "MX" && c.Kind == diff.Added:
+	case c.Path == PathRegistered && len(c.After) == 1 && c.After[0] == "true":
+		return Registered, High
+	case c.Path == PathRegistered:
+		return Dropped, Medium
+	case c.Path == PathRegistrar && c.Kind == diff.Changed:
+		return RegistrarChanged, High
+	case c.Path == PathDNSMX && c.Kind == diff.Added:
 		return MXAppeared, High
-	case isDNS && field == "NS":
+	case (c.Path == PathDNSNS || c.Path == PathNameservers) && c.Kind != diff.Added:
 		if owned {
 			return NSChanged, Critical
 		}
