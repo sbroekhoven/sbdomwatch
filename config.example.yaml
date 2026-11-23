@@ -14,6 +14,7 @@ defaults:
     owned: 1h
     candidate: 6h
     third-party: 6h
+  candidate_ttl: 2160h   # candidates are archived after 90 days without a notable change
 sinks:
   discord:
     webhook_env: SBDOMWATCH_DISCORD_WEBHOOK   # name of the variable, not the URL

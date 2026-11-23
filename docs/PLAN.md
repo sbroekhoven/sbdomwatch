@@ -89,7 +89,7 @@ internal/client/    API client used by the CLI
 
 ## Data model
 
-SQLite with embedded migrations. Times are UTC RFC3339 text. Domains are stored normalized: lowercase, punycode, no trailing dot.
+SQLite with embedded migrations. Times are UTC RFC3339 text. Domains are stored normalized: lowercase, punycode, no trailing dot. Rejected: IP literals, URLs, single-label names, special-use and private TLDs (`localhost`, `local`, `test`, `internal`, `lan`, `home.arpa`, `onion`, ...), unknown TLDs and names that are themselves a public suffix. Subdomains such as `mail.example.com` are accepted and kept as given.
 
 ```sql
 CREATE TABLE watches (
@@ -177,15 +177,20 @@ A domain that is not registered baselines after a single observation, and its fi
 
 ## API and CLI
 
-The API is JSON over HTTP under `/v1` with a bearer token. Adding a watch is an idempotent upsert: the same domain twice merges tags and origins instead of creating a duplicate. A `reason` is required on every add.
+The API is JSON over HTTP under `/v1` with a bearer token (`SBDOMWATCH_TOKEN`, at least 32 characters; `serve` refuses to start without it). Adding a watch is an idempotent upsert: the same domain twice merges tags and origins instead of creating a duplicate. A `reason` is required on every add.
+
+- **Merge rules:** an origin is added unless the same origin kind with the same reason exists; tags merge with new values winning; the template only moves up (candidate, third-party, owned); a re-added archived watch starts over as `new`; a paused watch stays paused. A candidate's `expires_at` is refreshed by a new origin.
+- **Actor:** the `X-Actor` header names who makes a change (`added_by` and the audit log); the CLI sends `$USER`, the default is `api`.
+- **Bulk:** at most 1000 watches per request, all or nothing.
+- **Errors:** `{"error": {"code", "message", "fields": [{"field", "message"}]}}`.
 
 | Method and path | Purpose |
 | --- | --- |
 | `POST /v1/watches` | add or merge a watch: `domain`, `template`, `reason`, optional `reference`, `origin`, `tags`, `interval_sec` |
 | `POST /v1/watches:bulk` | same, for a list |
-| `GET /v1/watches` | list, filter by `state`, `tag`, `origin`, `stale` |
+| `GET /v1/watches` | list, filter by `state`, `tag` (`key=value`), `origin`, `stale`; archived only with `all=true` or `state=archived` |
 | `GET /v1/watches/{domain}` | one watch with origins and current state |
-| `PATCH /v1/watches/{domain}` | pause, interval, tags |
+| `PATCH /v1/watches/{domain}` | `paused` (true/false), `interval_sec`, `tags` (a null value removes a tag); 409 on an archived watch |
 | `DELETE /v1/watches/{domain}` | archive; `?hard=true` removes it |
 | `POST /v1/watches/{domain}:rebaseline` | accept the current state as the new baseline |
 | `POST /v1/watches/{domain}:confirm` | confirm the baseline of an owned domain |
@@ -233,6 +238,8 @@ defaults:
   intervals:
     owned: 1h
     candidate: 6h
+    third-party: 6h
+  candidate_ttl: 2160h      # 90 days
 sinks:
   discord:
     webhook_env: SBDOMWATCH_DISCORD_WEBHOOK

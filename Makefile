@@ -20,10 +20,16 @@ lint: vet
 	@unformatted=$$(gofmt -l .); if [ -n "$$unformatted" ]; then echo "gofmt needed:"; echo "$$unformatted"; exit 1; fi
 	@if command -v staticcheck >/dev/null 2>&1; then staticcheck ./...; else echo "staticcheck not installed, skipping"; fi
 
-# Create local config.yaml and .env from the examples if they do not exist.
+# Create local config.yaml and .env from the examples if they do not exist,
+# and put a random API token in .env when it has none.
 config:
 	@test -f config.yaml || cp config.example.yaml config.yaml
-	@test -f .env || (cp .env.example .env && chmod 600 .env)
+	@test -f .env || (umask 077 && cp .env.example .env)
+	@if grep -q '^SBDOMWATCH_TOKEN=$$' .env; then \
+		umask 077 && token=$$(openssl rand -hex 32) && \
+		awk -v t="$$token" '/^SBDOMWATCH_TOKEN=$$/ { print "SBDOMWATCH_TOKEN=" t; next } { print }' .env > .env.tmp && \
+		mv .env.tmp .env && echo "generated SBDOMWATCH_TOKEN in .env"; \
+	fi
 
 docker: config
 	SBDOMWATCH_VERSION=$(VERSION) docker compose build
