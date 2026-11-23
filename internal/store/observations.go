@@ -109,6 +109,11 @@ func (s *Store) ApplyCheck(ctx context.Context, watchID int64, process ProcessFu
 		}
 		res.Watch.ID = watchID
 		res.Watch.NextCheckAt = res.Next
+		for _, o := range res.Observations {
+			if t := o.ObservedAt.UTC().Truncate(time.Second); res.Watch.LastObservedAt == nil || t.After(*res.Watch.LastObservedAt) {
+				res.Watch.LastObservedAt = &t
+			}
+		}
 		if _, err := saveWatch(ctx, tx, res.Watch); err != nil {
 			return err
 		}

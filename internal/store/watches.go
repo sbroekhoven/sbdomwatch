@@ -196,7 +196,7 @@ type querier interface {
 
 const selectWatch = `SELECT w.id, w.domain, w.template, w.state, w.interval_sec, w.next_check_at,
 	w.baseline_started_at, w.baseline_completed_at, w.volatile_fields, w.tags, w.expires_at,
-	w.created_at, w.updated_at
+	w.created_at, w.updated_at, w.baseline_confirmed_at, COALESCE(w.baseline_confirmed_by, ''), w.last_observed_at
 	FROM watches w`
 
 func getWatch(ctx context.Context, q querier, domain string) (watch.Watch, error) {
@@ -276,10 +276,12 @@ func scanWatch(rows *sql.Rows) (watch.Watch, error) {
 		w                            watch.Watch
 		next, created, updated       string
 		baseStart, baseDone, expires sql.NullString
+		confirmed, lastObserved      sql.NullString
 		volatileJSON, tagsJSON       string
 	)
 	err := rows.Scan(&w.ID, &w.Domain, &w.Template, &w.State, &w.IntervalSec, &next,
-		&baseStart, &baseDone, &volatileJSON, &tagsJSON, &expires, &created, &updated)
+		&baseStart, &baseDone, &volatileJSON, &tagsJSON, &expires, &created, &updated,
+		&confirmed, &w.BaselineConfirmedBy, &lastObserved)
 	if err != nil {
 		return w, fmt.Errorf("store: scan watch: %w", err)
 	}
@@ -296,6 +298,10 @@ func scanWatch(rows *sql.Rows) (watch.Watch, error) {
 	w.BaselineCompletedAt, e = parseTimePtr(baseDone)
 	errs = append(errs, e)
 	w.ExpiresAt, e = parseTimePtr(expires)
+	errs = append(errs, e)
+	w.BaselineConfirmedAt, e = parseTimePtr(confirmed)
+	errs = append(errs, e)
+	w.LastObservedAt, e = parseTimePtr(lastObserved)
 	errs = append(errs, e)
 	if e := json.Unmarshal([]byte(volatileJSON), &w.VolatileFields); e != nil {
 		errs = append(errs, fmt.Errorf("store: volatile_fields of %s: %w", w.Domain, e))
@@ -328,11 +334,13 @@ func saveWatch(ctx context.Context, tx *sql.Tx, w watch.Watch) (watch.Watch, err
 	}
 	args := []any{w.Template, w.State, w.IntervalSec, formatTime(w.NextCheckAt),
 		formatTimePtr(w.BaselineStartedAt), formatTimePtr(w.BaselineCompletedAt),
-		string(volatile), string(tags), formatTimePtr(w.ExpiresAt), formatTime(w.UpdatedAt)}
+		string(volatile), string(tags), formatTimePtr(w.ExpiresAt), formatTime(w.UpdatedAt),
+		formatTimePtr(w.BaselineConfirmedAt), nullIfEmpty(w.BaselineConfirmedBy), formatTimePtr(w.LastObservedAt)}
 	if w.ID == 0 {
 		err = tx.QueryRowContext(ctx, `INSERT INTO watches (template, state, interval_sec, next_check_at,
 			baseline_started_at, baseline_completed_at, volatile_fields, tags, expires_at, updated_at,
-			domain, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
+			baseline_confirmed_at, baseline_confirmed_by, last_observed_at,
+			domain, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
 			append(args, w.Domain, formatTime(w.CreatedAt))...).Scan(&w.ID)
 		if err != nil {
 			return w, fmt.Errorf("store: insert watch %s: %w", w.Domain, err)
@@ -340,7 +348,8 @@ func saveWatch(ctx context.Context, tx *sql.Tx, w watch.Watch) (watch.Watch, err
 	} else {
 		_, err = tx.ExecContext(ctx, `UPDATE watches SET template = ?, state = ?, interval_sec = ?,
 			next_check_at = ?, baseline_started_at = ?, baseline_completed_at = ?, volatile_fields = ?,
-			tags = ?, expires_at = ?, updated_at = ? WHERE id = ?`, append(args, w.ID)...)
+			tags = ?, expires_at = ?, updated_at = ?, baseline_confirmed_at = ?, baseline_confirmed_by = ?,
+			last_observed_at = ? WHERE id = ?`, append(args, w.ID)...)
 		if err != nil {
 			return w, fmt.Errorf("store: update watch %s: %w", w.Domain, err)
 		}
@@ -359,4 +368,11 @@ func saveWatch(ctx context.Context, tx *sql.Tx, w watch.Watch) (watch.Watch, err
 		}
 	}
 	return w, nil
+}
+
+func nullIfEmpty(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
 }

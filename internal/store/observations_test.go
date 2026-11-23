@@ -188,3 +188,18 @@ func TestApplyCheckPersistsEverything(t *testing.T) {
 		t.Error("aborted ApplyCheck wrote data")
 	}
 }
+
+func TestLastObservedAt(t *testing.T) {
+	s, clock := newStore(t)
+	id := add(t, s, watch.AddRequest{Domain: "a.com", Template: watch.TemplateOwned, Reason: "x"}).Watch.ID
+	if w, _ := s.GetWatch(t.Context(), "a.com"); w.LastObservedAt != nil {
+		t.Fatalf("new watch has last_observed_at %v", w.LastObservedAt)
+	}
+	at := clock.Now().Add(time.Minute)
+	if err := record(t, s, id, []check.Observation{obs(t, at, "1")}, at.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if w, _ := s.GetWatch(t.Context(), "a.com"); w.LastObservedAt == nil || !w.LastObservedAt.Equal(at) {
+		t.Errorf("last_observed_at = %v, want %v", w.LastObservedAt, at)
+	}
+}

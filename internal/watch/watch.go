@@ -97,6 +97,9 @@ type Watch struct {
 	NextCheckAt         time.Time         `json:"next_check_at"`
 	BaselineStartedAt   *time.Time        `json:"baseline_started_at,omitempty"`
 	BaselineCompletedAt *time.Time        `json:"baseline_completed_at,omitempty"`
+	BaselineConfirmedAt *time.Time        `json:"baseline_confirmed_at,omitempty"` // owned: a person checked the baseline
+	BaselineConfirmedBy string            `json:"baseline_confirmed_by,omitempty"`
+	LastObservedAt      *time.Time        `json:"last_observed_at,omitempty"`
 	VolatileFields      []string          `json:"volatile_fields"`
 	Tags                map[string]string `json:"tags"`
 	ExpiresAt           *time.Time        `json:"expires_at,omitempty"`
