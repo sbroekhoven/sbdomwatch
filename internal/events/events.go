@@ -72,6 +72,55 @@ type Event struct {
 	Payload    Payload   `json:"payload"`
 }
 
+// rank orders severities; unknown ones rank lowest.
+func (s Severity) rank() int {
+	switch s {
+	case Info:
+		return 1
+	case Medium:
+		return 2
+	case High:
+		return 3
+	case Critical:
+		return 4
+	}
+	return 0
+}
+
+// Valid reports whether s is a known severity.
+func (s Severity) Valid() bool { return s.rank() > 0 }
+
+// AtLeast reports whether s is min or more severe.
+func (s Severity) AtLeast(min Severity) bool { return s.rank() >= min.rank() }
+
+// AtLeast returns the severities at least as severe as min.
+func AtLeast(min Severity) []Severity {
+	var out []Severity
+	for _, s := range []Severity{Info, Medium, High, Critical} {
+		if s.AtLeast(min) {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// ValidType reports whether t is a known event type.
+func ValidType(t Type) bool {
+	switch t {
+	case BaselineComplete, Registered, Dropped, MXAppeared, NSChanged, RegistrarChanged,
+		RecordAdded, RecordChanged, RecordRemoved, Expiring, DanglingCNAME:
+		return true
+	}
+	return false
+}
+
+// Delivery is one pending outbox row: an event for one sink.
+type Delivery struct {
+	Event    Event
+	Sink     string
+	Attempts int // failed attempts so far
+}
+
 // ForChange maps a diff change to an event type and severity. owned raises
 // the severity of nameserver changes.
 func ForChange(c diff.Change, owned bool) (Type, Severity) {

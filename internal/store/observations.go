@@ -72,7 +72,8 @@ type CheckResult struct {
 	Observations []check.Observation
 	Baseline     bool // observations belong to the baseline
 	Events       []events.Event
-	Next         time.Time // next check
+	Routes       [][]string // per event (same index): the sinks to deliver it to
+	Next         time.Time  // next check
 }
 
 // ProcessFunc turns the current watch and diff state into a CheckResult.
@@ -125,16 +126,14 @@ func (s *Store) ApplyCheck(ctx context.Context, watchID int64, process ProcessFu
 				return fmt.Errorf("store: insert observation: %w", err)
 			}
 		}
-		for _, e := range res.Events {
+		for i, e := range res.Events {
 			e.WatchID = watchID
-			payload, err := json.Marshal(e.Payload)
-			if err != nil {
-				return fmt.Errorf("store: encode event: %w", err)
+			var sinks []string
+			if i < len(res.Routes) {
+				sinks = res.Routes[i]
 			}
-			err = tx.QueryRowContext(ctx, `INSERT INTO events (watch_id, type, severity, occurred_at, payload)
-				VALUES (?, ?, ?, ?, ?) RETURNING id`, watchID, e.Type, e.Severity, formatTime(e.OccurredAt), string(payload)).Scan(&e.ID)
-			if err != nil {
-				return fmt.Errorf("store: insert event: %w", err)
+			if e, err = insertEvent(ctx, tx, e, sinks); err != nil {
+				return err
 			}
 			stored = append(stored, e)
 		}

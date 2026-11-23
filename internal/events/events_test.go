@@ -31,3 +31,15 @@ func TestForChange(t *testing.T) {
 		}
 	}
 }
+
+func TestSeverity(t *testing.T) {
+	if !High.AtLeast(Medium) || Medium.AtLeast(High) || !Critical.AtLeast(Critical) || Severity("bogus").Valid() {
+		t.Error("severity ordering wrong")
+	}
+	if got := AtLeast(High); len(got) != 2 || got[0] != High || got[1] != Critical {
+		t.Errorf("AtLeast(high) = %v", got)
+	}
+	if !ValidType(MXAppeared) || ValidType("nope") {
+		t.Error("ValidType wrong")
+	}
+}
