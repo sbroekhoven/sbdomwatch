@@ -140,7 +140,10 @@ func Load(path string, getenv func(string) string) (Server, error) {
 // secretKeys are keys that must never appear in a config file.
 var secretKeys = []string{"token", "webhook", "webhook_url", "password", "secret"}
 
-func decode(data []byte, cfg *Server) error {
+func decode(data []byte, cfg *Server) error { return decodeStrict(data, cfg) }
+
+// decodeStrict decodes YAML into v, rejecting unknown and secret keys.
+func decodeStrict(data []byte, v any) error {
 	var raw map[string]any
 	if err := yaml.Unmarshal(data, &raw); err != nil {
 		return fmt.Errorf("parse yaml: %w", err)
@@ -150,7 +153,7 @@ func decode(data []byte, cfg *Server) error {
 	}
 	dec := yaml.NewDecoder(bytes.NewReader(data))
 	dec.KnownFields(true)
-	if err := dec.Decode(cfg); err != nil && !errors.Is(err, io.EOF) {
+	if err := dec.Decode(v); err != nil && !errors.Is(err, io.EOF) {
 		return fmt.Errorf("decode: %w", err)
 	}
 	return nil

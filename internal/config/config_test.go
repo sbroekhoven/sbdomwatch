@@ -134,3 +134,61 @@ func TestLogValueHidesSecrets(t *testing.T) {
 		t.Errorf("want token_set in log output: %s", out)
 	}
 }
+
+func TestLoadClient(t *testing.T) {
+	c, err := LoadClient(filepath.Join(t.TempDir(), "missing.yaml"))
+	if err != nil || c.URL != "" {
+		t.Fatalf("missing: %+v, %v", c, err)
+	}
+	tests := []struct {
+		name, content, wantURL, wantErr string
+	}{
+		{"url", "url: https://watch.example.com\n", "https://watch.example.com", ""},
+		{"token rejected", "url: x\ntoken: abc\n", "", "looks like a secret"},
+		{"unknown key", "uri: x\n", "", "uri"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c, err := LoadClient(writeFile(t, tt.content))
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("err = %v", err)
+				}
+				return
+			}
+			if err != nil || c.URL != tt.wantURL {
+				t.Fatalf("got %+v, %v", c, err)
+			}
+		})
+	}
+}
+
+func TestResolveURL(t *testing.T) {
+	env := envMap(map[string]string{EnvURL: "http://env"})
+	none := envMap(nil)
+	tests := []struct {
+		flag string
+		env  func(string) string
+		file Client
+		want string
+	}{
+		{"http://flag", env, Client{URL: "http://file"}, "http://flag"},
+		{"", env, Client{URL: "http://file"}, "http://env"},
+		{"", none, Client{URL: "http://file"}, "http://file"},
+		{"", none, Client{}, DefaultURL},
+	}
+	for _, tt := range tests {
+		if got := ResolveURL(tt.flag, tt.env, tt.file); got != tt.want {
+			t.Errorf("got %q, want %q", got, tt.want)
+		}
+	}
+}
+
+func TestClientConfigPath(t *testing.T) {
+	if got := ClientConfigPath(envMap(map[string]string{"XDG_CONFIG_HOME": "/x"})); got != "/x/sbdomwatch/config.yaml" {
+		t.Errorf("xdg: %s", got)
+	}
+	if got := ClientConfigPath(envMap(map[string]string{"HOME": "/home/seb"})); got != "/home/seb/.config/sbdomwatch/config.yaml" {
+		t.Errorf("home: %s", got)
+	}
+}

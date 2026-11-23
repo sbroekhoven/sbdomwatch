@@ -49,7 +49,11 @@ func (a *app) rootCmd() *cobra.Command {
 	pf.StringVar(&a.url, "url", "", "API base URL (env "+config.EnvURL+")")
 	pf.StringVarP(&a.output, "output", "o", "table", "output format: table or json")
 
-	root.AddCommand(a.serveCmd(), a.versionCmd())
+	root.AddCommand(
+		a.serveCmd(), a.versionCmd(),
+		a.addCmd(), a.importCmd(), a.lsCmd(), a.showCmd(),
+		a.pauseCmd(), a.resumeCmd(), a.archiveCmd(),
+	)
 	return root
 }
 

@@ -7,9 +7,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
+
+	"github.com/sbroekhoven/sbdomwatch/internal/client"
 )
 
 // version is set at build time with -ldflags "-X main.version=...".
@@ -17,10 +20,10 @@ var version = "dev"
 
 // Stable exit codes.
 const (
-	exitOK    = 0
-	exitError = 1
-	exitUsage = 2
-	// exitNotFound (3) arrives with the watch commands.
+	exitOK       = 0
+	exitError    = 1
+	exitUsage    = 2
+	exitNotFound = 3
 )
 
 func main() {
@@ -39,12 +42,24 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, lookupEnv
 		return exitOK
 	}
 	fmt.Fprintln(stderr, "error:", err)
+	code := exitCode(err)
+	if code == exitUsage {
+		fmt.Fprintf(stderr, "Run '%s --help' for usage.\n", root.CommandPath())
+	}
+	return code
+}
+
+// exitCode maps an error to a stable exit code.
+func exitCode(err error) int {
 	var ce *codeError
-	if errors.As(err, &ce) {
-		if ce.code == exitUsage {
-			fmt.Fprintf(stderr, "Run '%s --help' for usage.\n", root.CommandPath())
-		}
+	var ae *client.APIError
+	switch {
+	case errors.As(err, &ce):
 		return ce.code
+	case errors.Is(err, client.ErrNotFound):
+		return exitNotFound
+	case errors.As(err, &ae) && ae.Status == http.StatusBadRequest:
+		return exitUsage
 	}
 	return exitError
 }

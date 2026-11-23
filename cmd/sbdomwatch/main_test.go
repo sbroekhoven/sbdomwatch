@@ -150,3 +150,7 @@ func waitForListen(t *testing.T, logs *syncBuffer) string {
 	t.Fatalf("server did not log its address; logs: %s", logs.String())
 	return ""
 }
+
+func writeTempAt(path, content string) error {
+	return os.WriteFile(path, []byte(content), 0o600)
+}
