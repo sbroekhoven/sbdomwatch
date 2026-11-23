@@ -1,0 +1,6 @@
+/bin/
+.env
+/config.yaml
+*.db
+*.db-wal
+*.db-shm
