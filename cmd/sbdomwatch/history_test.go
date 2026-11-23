@@ -10,7 +10,9 @@ import (
 
 	"github.com/sbroekhoven/sbdomwatch/internal/check"
 	dnscheck "github.com/sbroekhoven/sbdomwatch/internal/check/dns"
+	"github.com/sbroekhoven/sbdomwatch/internal/diff"
 	"github.com/sbroekhoven/sbdomwatch/internal/sched"
+	"github.com/sbroekhoven/sbdomwatch/internal/watch"
 )
 
 type testClock struct {
@@ -124,5 +126,47 @@ func TestPhase3AcceptanceCLI(t *testing.T) {
 	}
 	if code, _, errOut := e.run("history", "example.com", "--since", "soon"); code != exitUsage {
 		t.Errorf("bad since exit = %d (%s)", code, errOut)
+	}
+}
+
+func TestEventsCLI(t *testing.T) {
+	e := newCLIEnv(t)
+	clock := &testClock{t: time.Now().UTC().Truncate(time.Second)}
+	dns := &fakeDNS{now: clock.Now, a: []string{"192.0.2.1"}}
+	s := sched.New(sched.Config{
+		Store: e.st, Checks: []check.Check{dns}, Log: slog.New(slog.DiscardHandler),
+		Extractors: map[string]diff.Extractor{dnscheck.Name: dnscheck.Facts},
+		Lifecycle:  watch.LifecycleConfig{BaselineObservations: 1, Debounce: 1},
+		Now:        clock.Now, Rand: func() float64 { return 0.5 },
+	})
+	if code, _, errOut := e.run("add", "example.com", "--template", "owned", "--reason", "x"); code != 0 {
+		t.Fatal(errOut)
+	}
+	if _, err := s.RunOnce(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	dns.setA("192.0.2.9")
+	clock.Advance(time.Hour)
+	if _, err := s.RunOnce(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+
+	code, out, errOut := e.run("events", "--since", "")
+	if code != 0 {
+		t.Fatalf("events: %d %s", code, errOut)
+	}
+	for _, want := range []string{"record_changed", "dns.A +192.0.2.9 -192.0.2.1", "baseline_complete", "1 observation(s)"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("events output lacks %q:\n%s", want, out)
+		}
+	}
+	if _, out, _ := e.run("events", "--since", "", "--type", "baseline_complete", "-o", "json"); strings.Count(out, `"type": "baseline_complete"`) != 1 || strings.Contains(out, "record_changed") {
+		t.Errorf("type filter:\n%s", out)
+	}
+	if _, out, _ := e.run("events", "--since", "", "--severity", "high"); !strings.Contains(out, "no events") {
+		t.Errorf("severity filter:\n%s", out)
+	}
+	if code, _, _ := e.run("events", "--type", "nope"); code != exitUsage {
+		t.Errorf("bad type exit = %d", code)
 	}
 }

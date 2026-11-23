@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/sbroekhoven/sbdomwatch/internal/api"
+	"github.com/sbroekhoven/sbdomwatch/internal/events"
 	"github.com/sbroekhoven/sbdomwatch/internal/store"
 	"github.com/sbroekhoven/sbdomwatch/internal/watch"
 )
@@ -138,6 +139,38 @@ func (c *Client) History(ctx context.Context, domain, since string, limit int) (
 	var out api.HistoryResponse
 	err := c.do(ctx, http.MethodGet, watchPath(domain)+"/history", q, nil, &out)
 	return out, err
+}
+
+// EventOptions filter Events.
+type EventOptions struct {
+	Since    string   // RFC 3339, 24h or 7d
+	Types    []string // event types
+	Domain   string
+	Severity string // minimum severity
+	Limit    int
+}
+
+// Events lists events, newest first.
+func (c *Client) Events(ctx context.Context, o EventOptions) ([]events.Event, error) {
+	q := url.Values{}
+	if o.Since != "" {
+		q.Set("since", o.Since)
+	}
+	if len(o.Types) > 0 {
+		q.Set("type", strings.Join(o.Types, ","))
+	}
+	if o.Domain != "" {
+		q.Set("watch", o.Domain)
+	}
+	if o.Severity != "" {
+		q.Set("severity", o.Severity)
+	}
+	if o.Limit > 0 {
+		q.Set("limit", strconv.Itoa(o.Limit))
+	}
+	var out api.EventsResponse
+	err := c.do(ctx, http.MethodGet, "/v1/events", q, nil, &out)
+	return out.Events, err
 }
 
 // watchPath is unescaped; do escapes it. A "/" in domain cannot form a

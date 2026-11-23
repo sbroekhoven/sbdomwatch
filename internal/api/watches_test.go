@@ -14,6 +14,7 @@ import (
 
 	"github.com/sbroekhoven/sbdomwatch/internal/check"
 	"github.com/sbroekhoven/sbdomwatch/internal/diff"
+	"github.com/sbroekhoven/sbdomwatch/internal/events"
 	"github.com/sbroekhoven/sbdomwatch/internal/store"
 	"github.com/sbroekhoven/sbdomwatch/internal/watch"
 )
@@ -385,5 +386,67 @@ func TestHistory(t *testing.T) {
 	}
 	if rec := a.do(http.MethodGet, "/v1/watches/nope.com/history", ""); rec.Code != http.StatusNotFound {
 		t.Errorf("missing watch: %d", rec.Code)
+	}
+}
+
+func TestEvents(t *testing.T) {
+	a := newTestAPI(t)
+	now := time.Now().UTC().Truncate(time.Second)
+	for _, d := range []string{"a.com", "b.com"} {
+		a.do(http.MethodPost, "/v1/watches", `{"domain":"`+d+`","template":"owned","reason":"x"}`)
+	}
+	emit := func(domain string, e events.Event) {
+		w, _ := a.st.GetWatch(t.Context(), domain)
+		_, err := a.st.ApplyCheck(t.Context(), w.ID, func(w watch.Watch, st diff.State) (store.CheckResult, error) {
+			e.Payload.Domain = w.Domain
+			return store.CheckResult{Watch: w, Diff: st, Events: []events.Event{e}, Next: now}, nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	emit("a.com", events.Event{Type: events.BaselineComplete, Severity: events.Info, OccurredAt: now.Add(-48 * time.Hour)})
+	emit("a.com", events.Event{Type: events.MXAppeared, Severity: events.High, OccurredAt: now.Add(-time.Hour)})
+	emit("b.com", events.Event{Type: events.NSChanged, Severity: events.Critical, OccurredAt: now.Add(-2 * time.Hour)})
+
+	tests := []struct {
+		query string
+		want  int
+		types []events.Type
+	}{
+		{"", 200, []events.Type{events.MXAppeared, events.NSChanged, events.BaselineComplete}},
+		{"?since=24h", 200, []events.Type{events.MXAppeared, events.NSChanged}},
+		{"?type=ns_changed,mx_appeared", 200, []events.Type{events.MXAppeared, events.NSChanged}},
+		{"?watch=A.COM.", 200, []events.Type{events.MXAppeared, events.BaselineComplete}},
+		{"?severity=critical", 200, []events.Type{events.NSChanged}},
+		{"?limit=1", 200, []events.Type{events.MXAppeared}},
+		{"?type=bogus", 400, nil},
+		{"?severity=loud", 400, nil},
+		{"?watch=localhost", 400, nil},
+		{"?since=soon", 400, nil},
+		{"?limit=0", 400, nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.query, func(t *testing.T) {
+			rec := a.do(http.MethodGet, "/v1/events"+tt.query, "")
+			if rec.Code != tt.want {
+				t.Fatalf("status = %d: %s", rec.Code, rec.Body)
+			}
+			if tt.want != 200 {
+				return
+			}
+			got := decode[EventsResponse](t, rec).Events
+			if len(got) != len(tt.types) {
+				t.Fatalf("got %d events, want %v", len(got), tt.types)
+			}
+			for i := range got {
+				if got[i].Type != tt.types[i] || got[i].ID == 0 || got[i].Payload.Domain == "" {
+					t.Errorf("event %d = %+v", i, got[i])
+				}
+			}
+		})
+	}
+	if rec := a.do(http.MethodGet, "/v1/events", "", "Authorization", ""); rec.Code != http.StatusUnauthorized {
+		t.Errorf("events without token: %d", rec.Code)
 	}
 }
