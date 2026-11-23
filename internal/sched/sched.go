@@ -12,28 +12,34 @@ import (
 	"time"
 
 	"github.com/sbroekhoven/sbdomwatch/internal/check"
+	"github.com/sbroekhoven/sbdomwatch/internal/diff"
+	"github.com/sbroekhoven/sbdomwatch/internal/events"
 	"github.com/sbroekhoven/sbdomwatch/internal/store"
+	"github.com/sbroekhoven/sbdomwatch/internal/watch"
 )
 
 // Store is what the scheduler needs from the store.
 type Store interface {
 	ClaimDue(ctx context.Context, now time.Time, limit int, lease time.Duration) ([]store.Due, error)
-	RecordCheck(ctx context.Context, watchID int64, obs []check.Observation, next time.Time) error
+	ApplyCheck(ctx context.Context, watchID int64, process store.ProcessFunc) ([]events.Event, error)
 	Reschedule(ctx context.Context, watchID int64, next time.Time) error
 }
 
 // Config configures a Scheduler. Zero values get defaults.
 type Config struct {
-	Store   Store
-	Checks  []check.Check
-	Log     *slog.Logger
-	Workers int           // concurrent watches; default 8
-	Tick    time.Duration // how often to look for due watches; default 5s
-	Lease   time.Duration // how long a claimed watch is hidden from other claims; default 10m
-	Jitter  float64       // +/- fraction of the interval; default 0.1
-	Retry   time.Duration // delay after a failed check, capped at the interval; default 5m
-	Now     func() time.Time
-	Rand    func() float64 // in [0,1); default math/rand/v2
+	Store       Store
+	Checks      []check.Check
+	Extractors  map[string]diff.Extractor // facts per check name; a check without one is stored but not compared
+	Lifecycle   watch.LifecycleConfig
+	Log         *slog.Logger
+	BaselineGap time.Duration // delay between baseline observations; default 3m
+	Workers     int           // concurrent watches; default 8
+	Tick        time.Duration // how often to look for due watches; default 5s
+	Lease       time.Duration // how long a claimed watch is hidden from other claims; default 10m
+	Jitter      float64       // +/- fraction of the interval; default 0.1
+	Retry       time.Duration // delay after a failed check, capped at the interval; default 5m
+	Now         func() time.Time
+	Rand        func() float64 // in [0,1); default math/rand/v2
 }
 
 // Scheduler runs checks on due watches.
@@ -60,6 +66,9 @@ func New(cfg Config) *Scheduler {
 	}
 	if cfg.Now == nil {
 		cfg.Now = time.Now
+	}
+	if cfg.BaselineGap <= 0 {
+		cfg.BaselineGap = 3 * time.Minute
 	}
 	if cfg.Rand == nil {
 		cfg.Rand = rand.Float64
@@ -143,16 +152,28 @@ func (s *Scheduler) checkOne(ctx context.Context, d store.Due) {
 	// Finish the bookkeeping even if shutdown starts now.
 	wctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 	defer cancel()
-	interval := time.Duration(d.IntervalSec) * time.Second
 	var err error
 	if len(obs) == 0 {
-		next := s.next(min(interval, s.cfg.Retry))
+		next := s.next(min(time.Duration(d.IntervalSec)*time.Second, s.cfg.Retry))
 		err = s.cfg.Store.Reschedule(wctx, d.ID, next)
 		log.InfoContext(ctx, "no observations, retrying later", "next_check_at", next)
 	} else {
-		next := s.next(interval)
-		err = s.cfg.Store.RecordCheck(wctx, d.ID, obs, next)
-		log.DebugContext(ctx, "observed", "checks", len(obs), "next_check_at", next)
+		facts := s.facts(obs, log)
+		var evs []events.Event
+		evs, err = s.cfg.Store.ApplyCheck(wctx, d.ID, func(w watch.Watch, st diff.State) (store.CheckResult, error) {
+			out := watch.Observe(w, st, facts, s.cfg.Lifecycle, s.cfg.Now())
+			delay := time.Duration(out.Watch.IntervalSec) * time.Second
+			if out.Baselining {
+				delay = s.cfg.BaselineGap
+			}
+			return store.CheckResult{
+				Watch: out.Watch, Diff: out.Diff, Observations: obs, Baseline: out.Baseline,
+				Events: out.Events, Next: s.next(delay),
+			}, nil
+		})
+		for _, e := range evs {
+			log.InfoContext(ctx, "event", "event_id", e.ID, "type", e.Type, "severity", e.Severity)
+		}
 	}
 	if errors.Is(err, store.ErrNotFound) {
 		return // deleted while being checked
@@ -160,6 +181,26 @@ func (s *Scheduler) checkOne(ctx context.Context, d store.Due) {
 	if err != nil {
 		log.ErrorContext(ctx, "recording check failed", "err", err)
 	}
+}
+
+// facts extracts and merges the facts of every observation. A check without
+// an extractor, or whose data cannot be read, contributes no facts, so its
+// fields count as unknown.
+func (s *Scheduler) facts(obs []check.Observation, log *slog.Logger) diff.Facts {
+	parts := make([]diff.Facts, 0, len(obs))
+	for _, o := range obs {
+		ex, ok := s.cfg.Extractors[o.Check]
+		if !ok {
+			continue
+		}
+		f, err := ex(o.Data)
+		if err != nil {
+			log.Warn("cannot extract facts", "check", o.Check, "err", err)
+			continue
+		}
+		parts = append(parts, f)
+	}
+	return diff.Merge(parts...)
 }
 
 // next returns now + d with +/- Jitter, rounded down to whole seconds.

@@ -98,9 +98,14 @@ func TestPhase3AcceptanceCLI(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("history: %d %s", code, errOut)
 	}
-	lines := strings.Split(strings.TrimSpace(out), "\n")
-	if len(lines) != 4 {
-		t.Fatalf("want header and 3 observations, got:\n%s", out)
+	var lines []string
+	for _, l := range strings.Split(strings.TrimSpace(out), "\n") {
+		if strings.Contains(l, "observation") || strings.HasPrefix(l, "TIME") {
+			lines = append(lines, l)
+		}
+	}
+	if len(lines) != 4 || !strings.Contains(out, "baseline_complete") {
+		t.Fatalf("want header, 3 observations and a baseline_complete event, got:\n%s", out)
 	}
 	for i, want := range []string{"changed  A:2 NS:2", "same     A:1 NS:2", "first    A:1 NS:2"} {
 		if !strings.Contains(lines[i+1], want) {

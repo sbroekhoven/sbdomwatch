@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/sbroekhoven/sbdomwatch/internal/check"
+	"github.com/sbroekhoven/sbdomwatch/internal/diff"
+	"github.com/sbroekhoven/sbdomwatch/internal/events"
 	"github.com/sbroekhoven/sbdomwatch/internal/watch"
 )
 
@@ -63,22 +65,85 @@ func (s *Store) ClaimDue(ctx context.Context, now time.Time, limit int, lease ti
 	return due, err
 }
 
-// RecordCheck stores the observations of one check round and sets the next
-// check time. It returns ErrNotFound if the watch was deleted meanwhile.
-func (s *Store) RecordCheck(ctx context.Context, watchID int64, obs []check.Observation, next time.Time) error {
-	return s.writeTx(ctx, func(tx *sql.Tx) error {
-		if err := watchExists(ctx, tx, watchID); err != nil {
+// CheckResult is what a ProcessFunc decides after one check round.
+type CheckResult struct {
+	Watch        watch.Watch // new state, baseline fields and volatile fields
+	Diff         diff.State
+	Observations []check.Observation
+	Baseline     bool // observations belong to the baseline
+	Events       []events.Event
+	Next         time.Time // next check
+}
+
+// ProcessFunc turns the current watch and diff state into a CheckResult.
+// It runs inside the write transaction and must not do I/O.
+type ProcessFunc func(w watch.Watch, st diff.State) (CheckResult, error)
+
+// ApplyCheck loads the watch and its diff state, lets process decide, and
+// stores the observations, the new watch and diff state and the events in
+// one transaction. It returns the stored events with their IDs, or
+// ErrNotFound if the watch was deleted meanwhile.
+func (s *Store) ApplyCheck(ctx context.Context, watchID int64, process ProcessFunc) ([]events.Event, error) {
+	var stored []events.Event
+	err := s.writeTx(ctx, func(tx *sql.Tx) error {
+		ws, err := queryWatches(ctx, tx, selectWatch+" WHERE w.id = ?", watchID)
+		if err != nil {
 			return err
 		}
-		for _, o := range obs {
+		if len(ws) == 0 {
+			return fmt.Errorf("watch %d: %w", watchID, ErrNotFound)
+		}
+		var raw string
+		if err := tx.QueryRowContext(ctx, `SELECT diff_state FROM watches WHERE id = ?`, watchID).Scan(&raw); err != nil {
+			return fmt.Errorf("store: read diff state: %w", err)
+		}
+		var st diff.State
+		if err := json.Unmarshal([]byte(raw), &st); err != nil {
+			return fmt.Errorf("store: decode diff state of %s: %w", ws[0].Domain, err)
+		}
+
+		res, err := process(ws[0], st)
+		if err != nil {
+			return err
+		}
+		res.Watch.ID = watchID
+		res.Watch.NextCheckAt = res.Next
+		if _, err := saveWatch(ctx, tx, res.Watch); err != nil {
+			return err
+		}
+		stJSON, err := json.Marshal(res.Diff)
+		if err != nil {
+			return fmt.Errorf("store: encode diff state: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE watches SET diff_state = ? WHERE id = ?`, string(stJSON), watchID); err != nil {
+			return fmt.Errorf("store: write diff state: %w", err)
+		}
+		for _, o := range res.Observations {
 			_, err := tx.ExecContext(ctx, `INSERT INTO observations (watch_id, check_name, observed_at, is_baseline, data, hash)
-				VALUES (?, ?, ?, 0, ?, ?)`, watchID, o.Check, formatTime(o.ObservedAt), string(o.Data), o.Hash)
+				VALUES (?, ?, ?, ?, ?, ?)`, watchID, o.Check, formatTime(o.ObservedAt), res.Baseline, string(o.Data), o.Hash)
 			if err != nil {
 				return fmt.Errorf("store: insert observation: %w", err)
 			}
 		}
-		return setNextCheck(ctx, tx, watchID, next)
+		for _, e := range res.Events {
+			e.WatchID = watchID
+			payload, err := json.Marshal(e.Payload)
+			if err != nil {
+				return fmt.Errorf("store: encode event: %w", err)
+			}
+			err = tx.QueryRowContext(ctx, `INSERT INTO events (watch_id, type, severity, occurred_at, payload)
+				VALUES (?, ?, ?, ?, ?) RETURNING id`, watchID, e.Type, e.Severity, formatTime(e.OccurredAt), string(payload)).Scan(&e.ID)
+			if err != nil {
+				return fmt.Errorf("store: insert event: %w", err)
+			}
+			stored = append(stored, e)
+		}
+		return nil
 	})
+	if err != nil {
+		return nil, err
+	}
+	return stored, nil
 }
 
 // Reschedule sets the next check time without storing anything, for

@@ -91,7 +91,7 @@ func TestOpenPragmasAndMigrations(t *testing.T) {
 		t.Fatal(err)
 	}
 	var n int
-	if err := s.r.QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&n); err != nil || n != 1 {
+	if err := s.r.QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&n); err != nil || n != 2 {
 		t.Errorf("schema_migrations rows = %d, %v", n, err)
 	}
 	s.Close()

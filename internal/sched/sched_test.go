@@ -100,12 +100,13 @@ func newEnv(t *testing.T, workers int) *env {
 		rdap:  &fakeCheck{name: "rdap", now: clock.Now, fail: map[string]bool{}, seen: map[string]int{}},
 	}
 	e.s = New(Config{
-		Store:   st,
-		Checks:  []check.Check{e.dns, e.rdap},
-		Log:     slog.New(slog.DiscardHandler),
-		Workers: workers,
-		Now:     clock.Now,
-		Rand:    func() float64 { return 0.5 }, // no jitter
+		Store:     st,
+		Checks:    []check.Check{e.dns, e.rdap},
+		Log:       slog.New(slog.DiscardHandler),
+		Workers:   workers,
+		Lifecycle: watch.LifecycleConfig{BaselineObservations: 1, Debounce: 2},
+		Now:       clock.Now,
+		Rand:      func() float64 { return 0.5 }, // no jitter
 	})
 	return e
 }
@@ -131,13 +132,26 @@ func (e *env) runOnce(t *testing.T) int {
 	return n
 }
 
+// history returns the observations of domain, newest first.
 func (e *env) history(t *testing.T, domain string) []store.TimelineEntry {
 	t.Helper()
-	h, err := e.st.History(t.Context(), domain, time.Time{}, 100)
+	return e.timeline(t, domain, "observation")
+}
+
+// timeline returns entries of one kind, newest first.
+func (e *env) timeline(t *testing.T, domain, kind string) []store.TimelineEntry {
+	t.Helper()
+	h, err := e.st.History(t.Context(), domain, time.Time{}, 1000)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return h
+	var out []store.TimelineEntry
+	for _, x := range h {
+		if x.Kind == kind {
+			out = append(out, x)
+		}
+	}
+	return out
 }
 
 func TestObservedOnSchedule(t *testing.T) {

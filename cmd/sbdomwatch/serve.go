@@ -15,9 +15,11 @@ import (
 	"github.com/sbroekhoven/sbdomwatch/internal/check"
 	dnscheck "github.com/sbroekhoven/sbdomwatch/internal/check/dns"
 	"github.com/sbroekhoven/sbdomwatch/internal/config"
+	"github.com/sbroekhoven/sbdomwatch/internal/diff"
 	"github.com/sbroekhoven/sbdomwatch/internal/ratelimit"
 	"github.com/sbroekhoven/sbdomwatch/internal/sched"
 	"github.com/sbroekhoven/sbdomwatch/internal/store"
+	"github.com/sbroekhoven/sbdomwatch/internal/watch"
 )
 
 func (a *app) serveCmd() *cobra.Command {
@@ -48,11 +50,17 @@ func (a *app) serveCmd() *cobra.Command {
 			srv := api.New(cfg.Listen, api.Deps{Store: st, Token: cfg.Token, Defaults: cfg.WatchDefaults(), Log: log})
 			dnsLimiter := ratelimit.New(cfg.RateLimits.DNSPerSec, int(math.Ceil(cfg.RateLimits.DNSPerSec)), nil)
 			sc := sched.New(sched.Config{
-				Store:   st,
-				Checks:  []check.Check{dnscheck.New(dnscheck.Config{Resolvers: cfg.Resolvers, Limiter: dnsLimiter})},
-				Log:     log.With("component", "scheduler"),
-				Workers: cfg.Scheduler.Workers,
-				Tick:    cfg.Scheduler.Tick,
+				Store:      st,
+				Checks:     []check.Check{dnscheck.New(dnscheck.Config{Resolvers: cfg.Resolvers, Limiter: dnsLimiter})},
+				Extractors: map[string]diff.Extractor{dnscheck.Name: dnscheck.Facts},
+				Lifecycle: watch.LifecycleConfig{
+					BaselineObservations: cfg.Defaults.BaselineObservations,
+					Debounce:             cfg.Defaults.DebounceObservations,
+				},
+				BaselineGap: cfg.Defaults.BaselineGap,
+				Log:         log.With("component", "scheduler"),
+				Workers:     cfg.Scheduler.Workers,
+				Tick:        cfg.Scheduler.Tick,
 			})
 			if err := runAll(ctx, srv.Run, sc.Run); err != nil {
 				return err

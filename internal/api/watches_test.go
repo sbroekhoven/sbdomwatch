@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/sbroekhoven/sbdomwatch/internal/check"
+	"github.com/sbroekhoven/sbdomwatch/internal/diff"
 	"github.com/sbroekhoven/sbdomwatch/internal/store"
 	"github.com/sbroekhoven/sbdomwatch/internal/watch"
 )
@@ -342,7 +343,10 @@ func TestHistory(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := a.st.RecordCheck(t.Context(), res.Watch.ID, []check.Observation{o}, now); err != nil {
+		_, err = a.st.ApplyCheck(t.Context(), res.Watch.ID, func(w watch.Watch, st diff.State) (store.CheckResult, error) {
+			return store.CheckResult{Watch: w, Diff: st, Observations: []check.Observation{o}, Next: now}, nil
+		})
+		if err != nil {
 			t.Fatal(err)
 		}
 	}

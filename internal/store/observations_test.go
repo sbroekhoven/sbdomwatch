@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/sbroekhoven/sbdomwatch/internal/check"
+	"github.com/sbroekhoven/sbdomwatch/internal/diff"
+	"github.com/sbroekhoven/sbdomwatch/internal/events"
 	"github.com/sbroekhoven/sbdomwatch/internal/watch"
 )
 
@@ -16,6 +18,15 @@ func obs(t *testing.T, at time.Time, v string) check.Observation {
 		t.Fatal(err)
 	}
 	return o
+}
+
+// record stores observations through ApplyCheck without changing the watch.
+func record(t *testing.T, s *Store, id int64, o []check.Observation, next time.Time) error {
+	t.Helper()
+	_, err := s.ApplyCheck(t.Context(), id, func(w watch.Watch, st diff.State) (CheckResult, error) {
+		return CheckResult{Watch: w, Diff: st, Observations: o, Next: next}, nil
+	})
+	return err
 }
 
 func TestClaimDue(t *testing.T) {
@@ -66,14 +77,14 @@ func TestRecordCheckAndHistory(t *testing.T) {
 	t0 := clock.Now()
 
 	next := t0.Add(time.Hour)
-	if err := s.RecordCheck(ctx, id, []check.Observation{obs(t, t0, "1")}, next); err != nil {
+	if err := record(t, s, id, []check.Observation{obs(t, t0, "1")}, next); err != nil {
 		t.Fatal(err)
 	}
 	w, _ := s.GetWatch(ctx, "a.com")
 	if !w.NextCheckAt.Equal(next) {
 		t.Errorf("next_check_at = %v, want %v", w.NextCheckAt, next)
 	}
-	if err := s.RecordCheck(ctx, id, []check.Observation{obs(t, t0.Add(time.Hour), "2")}, next.Add(time.Hour)); err != nil {
+	if err := record(t, s, id, []check.Observation{obs(t, t0.Add(time.Hour), "2")}, next.Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.w.Exec(`INSERT INTO events (watch_id, type, severity, occurred_at, payload) VALUES (?, 'mx_appeared', 'high', ?, '{}')`,
@@ -107,10 +118,73 @@ func TestRecordCheckAndHistory(t *testing.T) {
 	if err := s.DeleteWatch(ctx, "a.com", "seb"); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.RecordCheck(ctx, id, []check.Observation{obs(t, t0, "3")}, next); !errors.Is(err, ErrNotFound) {
+	if err := record(t, s, id, []check.Observation{obs(t, t0, "3")}, next); !errors.Is(err, ErrNotFound) {
 		t.Errorf("record on deleted watch: %v", err)
 	}
 	if err := s.Reschedule(ctx, id, next); !errors.Is(err, ErrNotFound) {
 		t.Errorf("reschedule deleted watch: %v", err)
+	}
+}
+
+func TestApplyCheckPersistsEverything(t *testing.T) {
+	s, clock := newStore(t)
+	ctx := t.Context()
+	id := add(t, s, watch.AddRequest{Domain: "a.com", Template: watch.TemplateOwned, Reason: "x"}).Watch.ID
+	now := clock.Now()
+	o := obs(t, now, "1")
+
+	evs, err := s.ApplyCheck(ctx, id, func(w watch.Watch, st diff.State) (CheckResult, error) {
+		if w.Domain != "a.com" || len(w.Origins) != 1 || st.Baseline != nil {
+			t.Errorf("process got %+v %+v", w, st)
+		}
+		w.State = watch.StateActive
+		w.VolatileFields = []string{"dns.A"}
+		done := now
+		w.BaselineCompletedAt = &done
+		return CheckResult{
+			Watch:        w,
+			Diff:         diff.State{Baseline: map[string][]string{"dns.MX": {}}},
+			Observations: []check.Observation{o},
+			Baseline:     true,
+			Events: []events.Event{{Type: events.BaselineComplete, Severity: events.Info, OccurredAt: now,
+				Payload: events.Payload{Domain: "a.com", Inventory: map[string][]string{"dns.MX": {}}}}},
+			Next: now.Add(3 * time.Minute),
+		}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(evs) != 1 || evs[0].ID == 0 || evs[0].WatchID != id {
+		t.Fatalf("stored events = %+v", evs)
+	}
+	w, _ := s.GetWatch(ctx, "a.com")
+	if w.State != watch.StateActive || w.VolatileFields[0] != "dns.A" || w.BaselineCompletedAt == nil || !w.NextCheckAt.Equal(now.Add(3*time.Minute)) {
+		t.Errorf("watch = %+v", w)
+	}
+	h, _ := s.History(ctx, "a.com", time.Time{}, 10)
+	if len(h) != 2 || !h[1].Baseline && !h[0].Baseline {
+		t.Errorf("history = %+v", h)
+	}
+	for _, e := range h {
+		if e.Kind == "event" && (e.Type != "baseline_complete" || e.Severity != "info") {
+			t.Errorf("event entry = %+v", e)
+		}
+		if e.Kind == "observation" && !e.Baseline {
+			t.Errorf("observation not marked baseline: %+v", e)
+		}
+	}
+
+	// The diff state round-trips into the next call.
+	_, err = s.ApplyCheck(ctx, id, func(w watch.Watch, st diff.State) (CheckResult, error) {
+		if _, ok := st.Baseline["dns.MX"]; !ok {
+			t.Errorf("diff state not persisted: %+v", st)
+		}
+		return CheckResult{}, errors.New("abort")
+	})
+	if err == nil {
+		t.Error("process error not returned")
+	}
+	if h2, _ := s.History(ctx, "a.com", time.Time{}, 10); len(h2) != 2 {
+		t.Error("aborted ApplyCheck wrote data")
 	}
 }
