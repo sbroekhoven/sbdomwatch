@@ -211,7 +211,7 @@ sbdomwatch confirm <domain>
 sbdomwatch version
 ```
 
-Global flags: `--url`, `--token`, `--env-file`, `-o table|json`. Client config lives in `~/.config/sbdomwatch/config.yaml` and holds the `url` only, overridable by `SBDOMWATCH_URL`. The token is a secret and comes only from `SBDOMWATCH_TOKEN` (or `--token`). Exit codes are stable: 0 ok, 1 error, 2 usage, 3 not found.
+Global flags: `--url`, `--env-file`, `-o table|json`. Client config lives in `~/.config/sbdomwatch/config.yaml` and holds the `url` only, overridable by `SBDOMWATCH_URL`. The token is a secret and comes only from `SBDOMWATCH_TOKEN`; there is no `--token` flag, so it never lands in shell history or `ps` output. Exit codes are stable: 0 ok, 1 error, 2 usage, 3 not found.
 
 **Secrets**
 
