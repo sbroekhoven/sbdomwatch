@@ -7,7 +7,9 @@ import (
 	"io/fs"
 	"log/slog"
 	"math"
+	"net/http"
 	"os"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -16,6 +18,7 @@ import (
 	dnscheck "github.com/sbroekhoven/sbdomwatch/internal/check/dns"
 	"github.com/sbroekhoven/sbdomwatch/internal/config"
 	"github.com/sbroekhoven/sbdomwatch/internal/diff"
+	"github.com/sbroekhoven/sbdomwatch/internal/events"
 	"github.com/sbroekhoven/sbdomwatch/internal/ratelimit"
 	"github.com/sbroekhoven/sbdomwatch/internal/sched"
 	"github.com/sbroekhoven/sbdomwatch/internal/store"
@@ -49,6 +52,12 @@ func (a *app) serveCmd() *cobra.Command {
 			defer st.Close()
 			srv := api.New(cfg.Listen, api.Deps{Store: st, Token: cfg.Token, Defaults: cfg.WatchDefaults(), Log: log})
 			dnsLimiter := ratelimit.New(cfg.RateLimits.DNSPerSec, int(math.Ceil(cfg.RateLimits.DNSPerSec)), nil)
+			sinks := buildSinks(cfg, a.version)
+			outbox := events.NewDispatcher(events.DispatcherConfig{
+				Store: st,
+				Sinks: sinks,
+				Log:   log.With("component", "outbox"),
+			})
 			sc := sched.New(sched.Config{
 				Store:      st,
 				Checks:     []check.Check{dnscheck.New(dnscheck.Config{Resolvers: cfg.Resolvers, Limiter: dnsLimiter})},
@@ -58,11 +67,13 @@ func (a *app) serveCmd() *cobra.Command {
 					Debounce:             cfg.Defaults.DebounceObservations,
 				},
 				BaselineGap: cfg.Defaults.BaselineGap,
+				Route:       events.Router(sinks),
+				OnEvents:    outbox.Notify,
 				Log:         log.With("component", "scheduler"),
 				Workers:     cfg.Scheduler.Workers,
 				Tick:        cfg.Scheduler.Tick,
 			})
-			if err := runAll(ctx, srv.Run, sc.Run); err != nil {
+			if err := runAll(ctx, srv.Run, sc.Run, outbox.Run); err != nil {
 				return err
 			}
 			log.InfoContext(ctx, "stopped")
@@ -71,6 +82,20 @@ func (a *app) serveCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&configPath, "config", "", "config file (env "+config.EnvConfig+", default "+config.DefaultConfig+" if it exists)")
 	return cmd
+}
+
+// buildSinks returns the sinks whose URL is configured.
+func buildSinks(cfg config.Server, version string) []events.Sink {
+	client := &http.Client{Timeout: 15 * time.Second}
+	ua := "sbdomwatch/" + version
+	var sinks []events.Sink
+	if cfg.DiscordWebhook != "" {
+		sinks = append(sinks, events.NewDiscord(cfg.DiscordWebhook, events.Severity(cfg.Sinks.Discord.MinSeverity), client, ua))
+	}
+	if cfg.WebhookURL != "" {
+		sinks = append(sinks, events.NewWebhook(cfg.WebhookURL, cfg.WebhookSecret, events.Severity(cfg.Sinks.Webhook.MinSeverity), client, ua))
+	}
+	return sinks
 }
 
 // runAll runs every fn until ctx is cancelled or one of them returns, then

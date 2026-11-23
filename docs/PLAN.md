@@ -67,6 +67,10 @@ Clients create watches through the API. The scheduler runs due checks, the diff 
     - A field first seen after the baseline (for example one that failed throughout baselining) is adopted silently.
     - The accepted baseline, pending changes and baseline samples live in `watches.diff_state` (JSON, migration 0002).
 - **Event outbox:** events are written to SQLite first and delivered to sinks afterwards, with retries, so nothing is lost when Discord or sbalert is down.
+    - One outbox row per event and sink, created in the transaction that stores the event; a sink only gets events at or above its `min_severity`.
+    - Retry: 30s doubling to at most 1h (+/-10% jitter, at least `Retry-After`), forever. After a failure the rest of that sink's batch waits for the next round. Delivery is at least once; receivers deduplicate on the event ID.
+    - Generic webhook: `POST` of the event JSON with `X-Sbdomwatch-Event`, `X-Sbdomwatch-Delivery` (event ID) and, with a secret, `X-Sbdomwatch-Timestamp` and `X-Sbdomwatch-Signature: sha256=HMAC(secret, timestamp + "." + body)`.
+    - Discord: one short message per event, mentions disabled, untrusted DNS/RDAP values in code spans. Errors and logs never contain webhook URLs.
 - **API:** JSON over HTTP with token auth. The CLI is the same binary and only talks to this API.
 - **Clients:** sbsquat, sbcti and manual use add watches, always with a reason; sbalert later subscribes to events.
 
@@ -252,6 +256,11 @@ scheduler:
 sinks:
   discord:
     webhook_env: SBDOMWATCH_DISCORD_WEBHOOK
+    min_severity: medium
+  webhook:
+    url_env: SBDOMWATCH_WEBHOOK_URL
+    secret_env: SBDOMWATCH_WEBHOOK_SECRET
+    min_severity: info
 log_level: info
 ```
 

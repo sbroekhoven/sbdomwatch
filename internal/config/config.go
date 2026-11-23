@@ -9,12 +9,14 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"net/url"
 	"os"
 	"strings"
 	"time"
 
 	"go.yaml.in/yaml/v3"
 
+	"github.com/sbroekhoven/sbdomwatch/internal/events"
 	"github.com/sbroekhoven/sbdomwatch/internal/watch"
 )
 
@@ -46,6 +48,8 @@ type Server struct {
 	// Secrets, from the environment only.
 	Token          string `yaml:"-"`
 	DiscordWebhook string `yaml:"-"`
+	WebhookURL     string `yaml:"-"`
+	WebhookSecret  string `yaml:"-"`
 }
 
 // RateLimits caps requests to upstream services.
@@ -76,14 +80,25 @@ type Intervals struct {
 	ThirdParty time.Duration `yaml:"third-party"`
 }
 
-// Sinks configures event delivery.
+// Sinks configures event delivery. A sink is enabled when its URL variable
+// is set in the environment.
 type Sinks struct {
 	Discord DiscordSink `yaml:"discord"`
+	Webhook WebhookSink `yaml:"webhook"`
 }
 
 // DiscordSink names the environment variable that holds the webhook URL.
 type DiscordSink struct {
-	WebhookEnv string `yaml:"webhook_env"`
+	WebhookEnv  string `yaml:"webhook_env"`
+	MinSeverity string `yaml:"min_severity"`
+}
+
+// WebhookSink is the generic JSON webhook (sbalert later). The secret, if
+// set, signs every request with HMAC-SHA256.
+type WebhookSink struct {
+	URLEnv      string `yaml:"url_env"`
+	SecretEnv   string `yaml:"secret_env"`
+	MinSeverity string `yaml:"min_severity"`
 }
 
 // Default returns the built-in configuration.
@@ -108,8 +123,11 @@ func Default() Server {
 			CandidateTTL: 90 * 24 * time.Hour,
 		},
 		Scheduler: Scheduler{Workers: 8, Tick: 5 * time.Second},
-		Sinks:     Sinks{Discord: DiscordSink{WebhookEnv: "SBDOMWATCH_DISCORD_WEBHOOK"}},
-		LogLevel:  "info",
+		Sinks: Sinks{
+			Discord: DiscordSink{WebhookEnv: "SBDOMWATCH_DISCORD_WEBHOOK", MinSeverity: "medium"},
+			Webhook: WebhookSink{URLEnv: "SBDOMWATCH_WEBHOOK_URL", SecretEnv: "SBDOMWATCH_WEBHOOK_SECRET", MinSeverity: "info"},
+		},
+		LogLevel: "info",
 	}
 }
 
@@ -138,6 +156,12 @@ func Load(path string, getenv func(string) string) (Server, error) {
 	cfg.Token = getenv(EnvToken)
 	if cfg.Sinks.Discord.WebhookEnv != "" {
 		cfg.DiscordWebhook = getenv(cfg.Sinks.Discord.WebhookEnv)
+	}
+	if cfg.Sinks.Webhook.URLEnv != "" {
+		cfg.WebhookURL = getenv(cfg.Sinks.Webhook.URLEnv)
+	}
+	if cfg.Sinks.Webhook.SecretEnv != "" {
+		cfg.WebhookSecret = getenv(cfg.Sinks.Webhook.SecretEnv)
 	}
 	if err := cfg.Validate(); err != nil {
 		return Server{}, err
@@ -173,8 +197,9 @@ func findSecretKey(m map[string]any, prefix string) string {
 		if prefix != "" {
 			path = prefix + "." + k
 		}
+		_, isMap := v.(map[string]any)
 		for _, s := range secretKeys {
-			if strings.EqualFold(k, s) {
+			if strings.EqualFold(k, s) && !isMap {
 				return path
 			}
 		}
@@ -241,13 +266,55 @@ func (c Server) Validate() error {
 	if len(c.Token) < MinTokenLen {
 		errs = append(errs, fmt.Errorf("%s must be set to at least %d characters (try: openssl rand -hex 32)", EnvToken, MinTokenLen))
 	}
-	if w := c.Sinks.Discord.WebhookEnv; w != "" && !envKeyRE.MatchString(w) {
-		errs = append(errs, fmt.Errorf("sinks.discord.webhook_env %q is not a valid variable name", w))
+	for name, v := range map[string]string{
+		"sinks.discord.webhook_env": c.Sinks.Discord.WebhookEnv,
+		"sinks.webhook.url_env":     c.Sinks.Webhook.URLEnv,
+		"sinks.webhook.secret_env":  c.Sinks.Webhook.SecretEnv,
+	} {
+		if v != "" && !envKeyRE.MatchString(v) {
+			errs = append(errs, fmt.Errorf("%s %q is not a valid variable name", name, v))
+		}
+	}
+	for name, v := range map[string]string{
+		"sinks.discord.min_severity": c.Sinks.Discord.MinSeverity,
+		"sinks.webhook.min_severity": c.Sinks.Webhook.MinSeverity,
+	} {
+		if !events.Severity(v).Valid() {
+			errs = append(errs, fmt.Errorf("%s %q: want info, medium, high or critical", name, v))
+		}
+	}
+	// URL errors name the variable, never the value: webhook URLs are secrets.
+	if c.DiscordWebhook != "" && !isDiscordWebhook(c.DiscordWebhook) {
+		errs = append(errs, fmt.Errorf("%s is not a Discord webhook URL (https://discord.com/api/webhooks/...)", c.Sinks.Discord.WebhookEnv))
+	}
+	if c.WebhookURL != "" && !isHTTPURL(c.WebhookURL) {
+		errs = append(errs, fmt.Errorf("%s is not an http(s) URL", c.Sinks.Webhook.URLEnv))
+	}
+	if c.WebhookSecret != "" && c.WebhookURL == "" {
+		errs = append(errs, fmt.Errorf("%s is set but %s is not", c.Sinks.Webhook.SecretEnv, c.Sinks.Webhook.URLEnv))
 	}
 	if _, err := ParseLevel(c.LogLevel); err != nil {
 		errs = append(errs, err)
 	}
 	return errors.Join(errs...)
+}
+
+func isDiscordWebhook(s string) bool {
+	u, err := url.Parse(s)
+	if err != nil || u.Scheme != "https" {
+		return false
+	}
+	switch strings.ToLower(u.Hostname()) {
+	case "discord.com", "discordapp.com", "canary.discord.com", "ptb.discord.com":
+	default:
+		return false
+	}
+	return strings.HasPrefix(u.Path, "/api/webhooks/")
+}
+
+func isHTTPURL(s string) bool {
+	u, err := url.Parse(s)
+	return err == nil && (u.Scheme == "https" || u.Scheme == "http") && u.Host != ""
 }
 
 // WatchDefaults returns the defaults for new watches.
@@ -281,5 +348,7 @@ func (c Server) LogValue() slog.Value {
 		slog.String("log_level", c.LogLevel),
 		slog.Bool("token_set", c.Token != ""),
 		slog.Bool("discord_webhook_set", c.DiscordWebhook != ""),
+		slog.Bool("webhook_set", c.WebhookURL != ""),
+		slog.Bool("webhook_secret_set", c.WebhookSecret != ""),
 	)
 }

@@ -68,9 +68,9 @@ func TestLoad(t *testing.T) {
 		{
 			name: "env overrides file and supplies secrets",
 			file: "listen: \":9000\"\nsinks:\n  discord:\n    webhook_env: MY_HOOK\n",
-			env:  map[string]string{EnvListen: ":9100", EnvToken: testToken + "x", "MY_HOOK": "https://hook"},
+			env:  map[string]string{EnvListen: ":9100", EnvToken: testToken + "x", "MY_HOOK": "https://discord.com/api/webhooks/1/x"},
 			check: func(t *testing.T, c Server) {
-				if c.Listen != ":9100" || c.Token != testToken+"x" || c.DiscordWebhook != "https://hook" {
+				if c.Listen != ":9100" || c.Token != testToken+"x" || c.DiscordWebhook != "https://discord.com/api/webhooks/1/x" {
 					t.Errorf("env not applied: listen=%q token_set=%v hook_set=%v", c.Listen, c.Token != "", c.DiscordWebhook != "")
 				}
 			},
@@ -81,6 +81,27 @@ func TestLoad(t *testing.T) {
 		{name: "short candidate ttl", file: "defaults:\n  candidate_ttl: 1h\n", wantErr: "candidate_ttl"},
 		{name: "bad workers", file: "scheduler:\n  workers: 0\n", wantErr: "scheduler.workers"},
 		{name: "bad tick", file: "scheduler:\n  tick: 10ms\n", wantErr: "scheduler.tick"},
+		{name: "discord url", env: map[string]string{"SBDOMWATCH_DISCORD_WEBHOOK": "https://discord.com/api/webhooks/1/abc"}, check: func(t *testing.T, c Server) {
+			if c.DiscordWebhook == "" || c.Sinks.Discord.MinSeverity != "medium" {
+				t.Errorf("discord: %+v", c.Sinks)
+			}
+		}},
+		{name: "bad discord url", env: map[string]string{"SBDOMWATCH_DISCORD_WEBHOOK": "https://evil.example/api/webhooks/SECRETPART"}, wantErr: "SBDOMWATCH_DISCORD_WEBHOOK is not a Discord webhook URL"},
+		{name: "http discord url", env: map[string]string{"SBDOMWATCH_DISCORD_WEBHOOK": "http://discord.com/api/webhooks/1/SECRETPART"}, wantErr: "not a Discord webhook"},
+		{name: "webhook url and secret", env: map[string]string{"SBDOMWATCH_WEBHOOK_URL": "http://sbalert:8080/in", "SBDOMWATCH_WEBHOOK_SECRET": "k"}, check: func(t *testing.T, c Server) {
+			if c.WebhookURL == "" || c.WebhookSecret != "k" {
+				t.Errorf("webhook not loaded")
+			}
+		}},
+		{name: "bad webhook url", env: map[string]string{"SBDOMWATCH_WEBHOOK_URL": "ftp://x/SECRETPART"}, wantErr: "SBDOMWATCH_WEBHOOK_URL is not an http(s) URL"},
+		{name: "secret without url", env: map[string]string{"SBDOMWATCH_WEBHOOK_SECRET": "k"}, wantErr: "is set but"},
+		{name: "bad min severity", file: "sinks:\n  discord:\n    min_severity: loud\n", wantErr: "min_severity"},
+		{name: "webhook section is not a secret", file: "sinks:\n  webhook:\n    min_severity: high\n", check: func(t *testing.T, c Server) {
+			if c.Sinks.Webhook.MinSeverity != "high" || c.Sinks.Webhook.URLEnv != "SBDOMWATCH_WEBHOOK_URL" {
+				t.Errorf("webhook: %+v", c.Sinks.Webhook)
+			}
+		}},
+		{name: "webhook url in file", file: "sinks:\n  webhook:\n    webhook_url: https://x\n", wantErr: "looks like a secret"},
 		{name: "unknown key", file: "lisen: \":1\"\n", wantErr: "lisen"},
 		{name: "token in file", file: "token: abc\n", wantErr: "token looks like a secret"},
 		{name: "nested secret in file", file: "sinks:\n  discord:\n    webhook: https://x\n", wantErr: "sinks.discord.webhook looks like a secret"},
@@ -102,6 +123,9 @@ func TestLoad(t *testing.T) {
 			if tt.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
 					t.Fatalf("err = %v, want containing %q", err, tt.wantErr)
+				}
+				if strings.Contains(err.Error(), "SECRETPART") {
+					t.Fatalf("error leaks the URL: %v", err)
 				}
 				return
 			}

@@ -31,6 +31,8 @@ type Config struct {
 	Checks      []check.Check
 	Extractors  map[string]diff.Extractor // facts per check name; a check without one is stored but not compared
 	Lifecycle   watch.LifecycleConfig
+	Route       func(events.Event) []string // sinks per event; nil: no deliveries
+	OnEvents    func()                      // called after new events were stored, e.g. to wake the outbox
 	Log         *slog.Logger
 	BaselineGap time.Duration // delay between baseline observations; default 3m
 	Workers     int           // concurrent watches; default 8
@@ -166,13 +168,22 @@ func (s *Scheduler) checkOne(ctx context.Context, d store.Due) {
 			if out.Baselining {
 				delay = s.cfg.BaselineGap
 			}
+			routes := make([][]string, len(out.Events))
+			if s.cfg.Route != nil {
+				for i, e := range out.Events {
+					routes[i] = s.cfg.Route(e)
+				}
+			}
 			return store.CheckResult{
 				Watch: out.Watch, Diff: out.Diff, Observations: obs, Baseline: out.Baseline,
-				Events: out.Events, Next: s.next(delay),
+				Events: out.Events, Routes: routes, Next: s.next(delay),
 			}, nil
 		})
 		for _, e := range evs {
 			log.InfoContext(ctx, "event", "event_id", e.ID, "type", e.Type, "severity", e.Severity)
+		}
+		if len(evs) > 0 && s.cfg.OnEvents != nil {
+			s.cfg.OnEvents()
 		}
 	}
 	if errors.Is(err, store.ErrNotFound) {

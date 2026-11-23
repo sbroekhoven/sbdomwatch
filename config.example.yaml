@@ -18,7 +18,12 @@ defaults:
 scheduler:
   workers: 8      # watches checked concurrently
   tick: 5s        # how often to look for due watches
-sinks:
+sinks:                 # a sink is on when its URL variable is set (in .env)
   discord:
     webhook_env: SBDOMWATCH_DISCORD_WEBHOOK   # name of the variable, not the URL
+    min_severity: medium                      # info, medium, high or critical
+  webhook:                                    # generic JSON webhook, e.g. sbalert
+    url_env: SBDOMWATCH_WEBHOOK_URL
+    secret_env: SBDOMWATCH_WEBHOOK_SECRET     # optional HMAC-SHA256 signing key
+    min_severity: info
 log_level: info
