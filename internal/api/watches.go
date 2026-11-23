@@ -55,18 +55,37 @@ type ListResponse struct {
 	Watches []watch.Watch `json:"watches"`
 }
 
+// route is one authenticated endpoint. The table is also checked against
+// openapi.yaml by a test.
+type route struct {
+	method, pattern string
+	handler         http.HandlerFunc
+}
+
+func (s *Server) routeTable() []route {
+	return []route{
+		{"POST", "/v1/watches", s.handleAdd},
+		{"POST", "/v1/watches:bulk", s.handleBulk},
+		{"GET", "/v1/watches", s.handleList},
+		{"GET", "/v1/watches/{domain}", s.handleGet},
+		{"PATCH", "/v1/watches/{domain}", s.handlePatch},
+		{"DELETE", "/v1/watches/{domain}", s.handleDelete},
+		{"GET", "/v1/watches/{domain}/history", s.handleHistory},
+		{"GET", "/v1/events", s.handleEvents},
+		{"POST", "/v1/watches/{target}", s.handleAction}, // {domain}:confirm, {domain}:rebaseline
+	}
+}
+
+// actionVerbs are the {domain}:verb endpoints handled by handleAction.
+var actionVerbs = []string{"confirm", "rebaseline"}
+
 func (s *Server) routes(mux *http.ServeMux) {
 	v1 := http.NewServeMux()
-	v1.HandleFunc("POST /v1/watches", s.handleAdd)
-	v1.HandleFunc("POST /v1/watches:bulk", s.handleBulk)
-	v1.HandleFunc("GET /v1/watches", s.handleList)
-	v1.HandleFunc("GET /v1/watches/{domain}", s.handleGet)
-	v1.HandleFunc("PATCH /v1/watches/{domain}", s.handlePatch)
-	v1.HandleFunc("DELETE /v1/watches/{domain}", s.handleDelete)
-	v1.HandleFunc("GET /v1/watches/{domain}/history", s.handleHistory)
-	v1.HandleFunc("GET /v1/events", s.handleEvents)
-	v1.HandleFunc("POST /v1/watches/{target}", s.handleAction) // {domain}:confirm, {domain}:rebaseline
+	for _, r := range s.routeTable() {
+		v1.HandleFunc(r.method+" "+r.pattern, r.handler)
+	}
 	mux.Handle("/v1/", s.requireToken(v1))
+	mux.HandleFunc("GET /openapi.yaml", handleOpenAPI)
 }
 
 func actor(r *http.Request) (string, error) {

@@ -1,0 +1,477 @@
+openapi: 3.1.0
+info:
+  title: sbdomwatch API
+  version: "1"
+  description: |
+    Domain and DNS watcher. Clients (the sbdomwatch CLI, sbsquat, sbcti) add
+    watches with a reason; sbdomwatch baselines them and reports changes as
+    events. All /v1 endpoints need `Authorization: Bearer <SBDOMWATCH_TOKEN>`.
+    `X-Actor` names who makes a change (added_by, audit log); default `api`.
+
+    Domains in requests may be in any case, with a trailing dot or in Unicode;
+    they are stored normalized (lowercase punycode). Times are RFC 3339 UTC.
+    This file is the source of truth for the API; a test keeps it in line
+    with the server's routes and the JSON fields of the Go types.
+servers:
+  - url: http://127.0.0.1:8480
+security:
+  - bearer: []
+
+paths:
+  /healthz:
+    get:
+      summary: Liveness
+      security: []
+      responses:
+        "200":
+          description: The service is up.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: {type: string, const: ok}
+
+  /openapi.yaml:
+    get:
+      summary: This document
+      security: []
+      responses:
+        "200":
+          description: OpenAPI 3.1 document.
+          content:
+            application/yaml: {}
+
+  /v1/watches:
+    post:
+      summary: Add a watch, or merge into an existing one (idempotent upsert)
+      description: |
+        The same domain again merges origins (unless the same origin kind and
+        reason exist) and tags; the template only moves up (candidate,
+        third-party, owned); an archived watch starts over as new.
+      parameters: [{$ref: "#/components/parameters/Actor"}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/AddRequest"}
+      responses:
+        "201":
+          description: Created.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/AddResult"}
+        "200":
+          description: Merged into an existing watch (or unchanged).
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/AddResult"}
+        "400": {$ref: "#/components/responses/Invalid"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "413": {$ref: "#/components/responses/TooLarge"}
+    get:
+      summary: List watches, ordered by domain
+      parameters:
+        - {name: state, in: query, schema: {$ref: "#/components/schemas/State"}}
+        - {name: tag, in: query, description: "key=value", schema: {type: string}}
+        - {name: origin, in: query, schema: {$ref: "#/components/schemas/OriginKind"}}
+        - {name: all, in: query, description: Include archived watches., schema: {type: boolean}}
+        - {name: stale, in: query, description: Only checkable watches not observed for twice their interval plus 10 minutes., schema: {type: boolean}}
+      responses:
+        "200":
+          description: Watches.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [watches]
+                properties:
+                  watches:
+                    type: array
+                    items: {$ref: "#/components/schemas/Watch"}
+        "400": {$ref: "#/components/responses/Invalid"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+
+  /v1/watches:bulk:
+    post:
+      summary: Add or merge up to 1000 watches, all or nothing
+      parameters: [{$ref: "#/components/parameters/Actor"}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [watches]
+              properties:
+                watches:
+                  type: array
+                  minItems: 1
+                  maxItems: 1000
+                  items: {$ref: "#/components/schemas/AddRequest"}
+      responses:
+        "200":
+          description: Every watch was stored.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  created: {type: integer}
+                  merged: {type: integer}
+                  unchanged: {type: integer}
+                  results:
+                    type: array
+                    items: {$ref: "#/components/schemas/AddResult"}
+        "400":
+          description: Nothing was stored; fields are named watches[i].field.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Error"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "413": {$ref: "#/components/responses/TooLarge"}
+
+  /v1/watches/{domain}:
+    parameters: [{$ref: "#/components/parameters/Domain"}]
+    get:
+      summary: One watch with its origins
+      responses:
+        "200":
+          description: The watch.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Watch"}
+        "400": {$ref: "#/components/responses/Invalid"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "404": {$ref: "#/components/responses/NotFound"}
+    patch:
+      summary: Pause or resume, change the interval or tags
+      parameters: [{$ref: "#/components/parameters/Actor"}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                paused: {type: boolean, description: "true pauses; false resumes (active if a baseline exists, else new)."}
+                interval_sec: {type: integer, minimum: 60, maximum: 604800}
+                tags:
+                  type: object
+                  description: Values replace tags; null removes a tag.
+                  additionalProperties: {type: [string, "null"]}
+      responses:
+        "200":
+          description: The watch after the change.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Watch"}
+        "400": {$ref: "#/components/responses/Invalid"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+    delete:
+      summary: Archive a watch, or remove it with hard=true
+      parameters:
+        - {$ref: "#/components/parameters/Actor"}
+        - {name: hard, in: query, description: Remove the watch with its observations and events., schema: {type: boolean}}
+      responses:
+        "200":
+          description: Archived.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Watch"}
+        "204": {description: Removed.}
+        "400": {$ref: "#/components/responses/Invalid"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "404": {$ref: "#/components/responses/NotFound"}
+
+  /v1/watches/{domain}:confirm:
+    parameters: [{$ref: "#/components/parameters/Domain"}]
+    post:
+      summary: Confirm the baseline of an owned watch after reviewing it
+      parameters: [{$ref: "#/components/parameters/Actor"}]
+      responses:
+        "200":
+          description: Confirmed.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Watch"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+
+  /v1/watches/{domain}:rebaseline:
+    parameters: [{$ref: "#/components/parameters/Domain"}]
+    post:
+      summary: Accept the current state as the new baseline
+      description: |
+        Takes the latest observation of each check as the baseline, drops
+        pending changes, keeps volatile fields, clears a confirmation and
+        emits baseline_complete with rebaseline true. With relearn the watch
+        baselines again from scratch (state new) instead.
+      parameters: [{$ref: "#/components/parameters/Actor"}]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                relearn: {type: boolean}
+      responses:
+        "200":
+          description: The watch after the change.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Watch"}
+        "400": {$ref: "#/components/responses/Invalid"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+
+  /v1/watches/{domain}/history:
+    parameters: [{$ref: "#/components/parameters/Domain"}]
+    get:
+      summary: Observations and events of a watch, newest first
+      parameters:
+        - {$ref: "#/components/parameters/Since"}
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 1000, default: 50}}
+      responses:
+        "200":
+          description: Timeline.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  domain: {type: string}
+                  entries:
+                    type: array
+                    items: {$ref: "#/components/schemas/TimelineEntry"}
+        "400": {$ref: "#/components/responses/Invalid"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "404": {$ref: "#/components/responses/NotFound"}
+
+  /v1/events:
+    get:
+      summary: Events, newest first
+      parameters:
+        - {$ref: "#/components/parameters/Since"}
+        - {name: type, in: query, description: Comma-separated event types., schema: {type: string}}
+        - {name: watch, in: query, description: Domain of one watch., schema: {type: string}}
+        - {name: severity, in: query, description: Minimum severity., schema: {$ref: "#/components/schemas/Severity"}}
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 1000, default: 100}}
+      responses:
+        "200":
+          description: Events.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  events:
+                    type: array
+                    items: {$ref: "#/components/schemas/Event"}
+        "400": {$ref: "#/components/responses/Invalid"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+
+components:
+  securitySchemes:
+    bearer: {type: http, scheme: bearer}
+
+  parameters:
+    Domain:
+      name: domain
+      in: path
+      required: true
+      schema: {type: string, examples: [degiro.nl]}
+    Actor:
+      name: X-Actor
+      in: header
+      description: Who makes the change; 1-64 characters of A-Z a-z 0-9 . _ @ + -.
+      schema: {type: string, default: api}
+    Since:
+      name: since
+      in: query
+      description: RFC 3339 time, a duration back from now (24h) or days (7d).
+      schema: {type: string}
+
+  responses:
+    Invalid:
+      description: Invalid request; fields name the problems.
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Error"}
+    Unauthenticated:
+      description: Missing or invalid bearer token.
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Error"}
+    NotFound:
+      description: No such watch.
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Error"}
+    Conflict:
+      description: Not possible in the watch's current state (archived, not owned, baseline not complete).
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Error"}
+    TooLarge:
+      description: Request body too large.
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Error"}
+
+  schemas:
+    State:
+      type: string
+      enum: [new, baselining, active, paused, archived]
+    Template:
+      type: string
+      enum: [owned, candidate, third-party]
+    OriginKind:
+      type: string
+      enum: [manual, typosquat, incident, intel]
+    Severity:
+      type: string
+      enum: [info, medium, high, critical]
+    EventType:
+      type: string
+      enum: [baseline_complete, registered, dropped, mx_appeared, ns_changed, registrar_changed,
+        record_added, record_changed, record_removed, expiring, dangling_cname]
+
+    AddRequest:
+      type: object
+      additionalProperties: false
+      required: [domain, template, reason]
+      properties:
+        domain: {type: string}
+        template: {$ref: "#/components/schemas/Template"}
+        reason: {type: string, minLength: 1, maxLength: 1000, description: Why the domain is watched. Required.}
+        reference: {type: string, maxLength: 256, description: Ticket, incident or mail reference.}
+        origin: {$ref: "#/components/schemas/OriginKind"}
+        tags:
+          type: object
+          maxProperties: 32
+          additionalProperties: {type: string, maxLength: 256}
+        interval_sec: {type: integer, minimum: 60, maximum: 604800, description: Default per template.}
+
+    AddResult:
+      type: object
+      properties:
+        watch: {$ref: "#/components/schemas/Watch"}
+        created: {type: boolean}
+        changed: {type: boolean}
+
+    Origin:
+      type: object
+      properties:
+        origin: {$ref: "#/components/schemas/OriginKind"}
+        reason: {type: string}
+        reference: {type: string}
+        added_by: {type: string}
+        added_at: {type: string, format: date-time}
+
+    Watch:
+      type: object
+      properties:
+        id: {type: integer}
+        domain: {type: string, description: Normalized (lowercase punycode).}
+        template: {$ref: "#/components/schemas/Template"}
+        state: {$ref: "#/components/schemas/State"}
+        interval_sec: {type: integer}
+        next_check_at: {type: string, format: date-time}
+        baseline_started_at: {type: string, format: date-time}
+        baseline_completed_at: {type: string, format: date-time}
+        baseline_confirmed_at: {type: string, format: date-time}
+        baseline_confirmed_by: {type: string}
+        last_observed_at: {type: string, format: date-time}
+        volatile_fields: {type: array, items: {type: string}, description: Field paths ignored by the diff.}
+        tags: {type: object, additionalProperties: {type: string}}
+        expires_at: {type: string, format: date-time, description: Candidates without a manual origin are archived then.}
+        created_at: {type: string, format: date-time}
+        updated_at: {type: string, format: date-time}
+        origins: {type: array, items: {$ref: "#/components/schemas/Origin"}}
+
+    TimelineEntry:
+      type: object
+      properties:
+        kind: {type: string, enum: [observation, event]}
+        id: {type: integer}
+        at: {type: string, format: date-time}
+        check: {type: string, description: "Observations: dns or rdap."}
+        hash: {type: string, description: "Observations: sha256 of data."}
+        baseline: {type: boolean, description: "Observations: part of the baseline."}
+        type: {type: string, description: "Events: the event type."}
+        severity: {type: string, description: "Events: the severity."}
+        data: {description: Observation data or event payload.}
+
+    Change:
+      type: object
+      properties:
+        path: {type: string, examples: [dns.MX, rdap.registrar]}
+        kind: {type: string, enum: [added, removed, changed]}
+        before: {type: array, items: {type: string}}
+        after: {type: array, items: {type: string}}
+        added: {type: array, items: {type: string}}
+        removed: {type: array, items: {type: string}}
+
+    Payload:
+      type: object
+      description: Domain-neutral event body; fields not relevant to a type are omitted.
+      properties:
+        domain: {type: string}
+        template: {$ref: "#/components/schemas/Template"}
+        origins:
+          type: array
+          items:
+            type: object
+            properties:
+              origin: {type: string}
+              reason: {type: string}
+              reference: {type: string}
+        tags: {type: object, additionalProperties: {type: string}}
+        change: {$ref: "#/components/schemas/Change"}
+        details: {type: array, items: {$ref: "#/components/schemas/Change"}, description: Related changes folded into this event.}
+        expiry: {type: string, format: date-time, description: "expiring: the registration expiry."}
+        baseline_confirmed: {type: boolean}
+        inventory: {type: object, additionalProperties: {type: array, items: {type: string}}, description: "baseline_complete: every field."}
+        volatile_fields: {type: array, items: {type: string}}
+        observations: {type: integer}
+        rebaseline: {type: boolean}
+
+    Event:
+      type: object
+      description: |
+        Also the body of the generic webhook sink, which adds the headers
+        X-Sbdomwatch-Event, X-Sbdomwatch-Delivery (the id, stable across
+        retries; delivery is at least once) and, with a secret,
+        X-Sbdomwatch-Timestamp and X-Sbdomwatch-Signature
+        (sha256=HMAC-SHA256(secret, timestamp + "." + body)).
+      properties:
+        id: {type: integer}
+        watch_id: {type: integer}
+        type: {$ref: "#/components/schemas/EventType"}
+        severity: {$ref: "#/components/schemas/Severity"}
+        occurred_at: {type: string, format: date-time}
+        payload: {$ref: "#/components/schemas/Payload"}
+
+    Error:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code: {type: string, enum: [invalid_argument, unauthenticated, not_found, conflict, too_large, internal]}
+            message: {type: string}
+            fields:
+              type: array
+              items:
+                type: object
+                properties:
+                  field: {type: string}
+                  message: {type: string}
