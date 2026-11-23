@@ -25,6 +25,9 @@ var Types = []uint16{
 	mdns.TypeNS, mdns.TypeTXT, mdns.TypeCAA, mdns.TypeSOA,
 }
 
+// TypeName returns the mnemonic of a record type, e.g. "MX".
+func TypeName(t uint16) string { return mdns.TypeToString[t] }
+
 // Data is the observation payload.
 type Data struct {
 	Records map[string]RRSet `json:"records"` // keyed by type, e.g. "MX"

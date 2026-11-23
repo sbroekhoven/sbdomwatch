@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sbroekhoven/sbdomwatch/internal/check"
 	"github.com/sbroekhoven/sbdomwatch/internal/store"
 	"github.com/sbroekhoven/sbdomwatch/internal/watch"
 )
@@ -329,5 +330,56 @@ func TestPatchArchiveDelete(t *testing.T) {
 	w, _ := a.st.ListWatches(t.Context(), store.Filter{All: true})
 	if len(w) != 0 {
 		t.Errorf("watches left after hard delete: %d", len(w))
+	}
+}
+
+func TestHistory(t *testing.T) {
+	a := newTestAPI(t)
+	res := decode[store.AddResult](t, a.do(http.MethodPost, "/v1/watches", `{"domain":"a.com","template":"owned","reason":"x"}`))
+	now := time.Now().UTC().Truncate(time.Second)
+	for i, at := range []time.Time{now.Add(-48 * time.Hour), now.Add(-time.Hour)} {
+		o, err := check.NewObservation("dns", at, map[string]int{"n": i})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := a.st.RecordCheck(t.Context(), res.Watch.ID, []check.Observation{o}, now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tests := []struct {
+		query string
+		want  int
+		count int
+	}{
+		{"", 200, 2},
+		{"?since=24h", 200, 1},
+		{"?since=3d", 200, 2},
+		{"?since=" + now.Add(-2*time.Hour).Format(time.RFC3339), 200, 1},
+		{"?limit=1", 200, 1},
+		{"?since=yesterday", 400, 0},
+		{"?since=-5h", 400, 0},
+		{"?limit=0", 400, 0},
+		{"?limit=5000", 400, 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.query, func(t *testing.T) {
+			rec := a.do(http.MethodGet, "/v1/watches/A.com./history"+tt.query, "")
+			if rec.Code != tt.want {
+				t.Fatalf("status = %d: %s", rec.Code, rec.Body)
+			}
+			if tt.want != 200 {
+				return
+			}
+			h := decode[HistoryResponse](t, rec)
+			if h.Domain != "a.com" || len(h.Entries) != tt.count {
+				t.Errorf("got %s with %d entries, want %d", h.Domain, len(h.Entries), tt.count)
+			}
+			if len(h.Entries) > 0 && string(h.Entries[0].Data) != `{"n":1}` {
+				t.Errorf("newest entry data = %s", h.Entries[0].Data)
+			}
+		})
+	}
+	if rec := a.do(http.MethodGet, "/v1/watches/nope.com/history", ""); rec.Code != http.StatusNotFound {
+		t.Errorf("missing watch: %d", rec.Code)
 	}
 }

@@ -21,6 +21,7 @@ type Deps struct {
 	Token    string // bearer token for /v1; never logged
 	Defaults watch.Defaults
 	Log      *slog.Logger
+	Now      func() time.Time // defaults to time.Now
 }
 
 // Server is the HTTP API server.
@@ -29,12 +30,16 @@ type Server struct {
 	store    Store
 	token    string
 	defaults watch.Defaults
+	now      func() time.Time
 	http     *http.Server
 }
 
 // New returns a server that will listen on addr.
 func New(addr string, d Deps) *Server {
-	s := &Server{log: d.Log, store: d.Store, token: d.Token, defaults: d.Defaults}
+	s := &Server{log: d.Log, store: d.Store, token: d.Token, defaults: d.Defaults, now: d.Now}
+	if s.now == nil {
+		s.now = time.Now
+	}
 	s.http = &http.Server{
 		Addr:              addr,
 		Handler:           s.Handler(),

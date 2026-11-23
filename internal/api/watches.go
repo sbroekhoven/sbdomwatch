@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/sbroekhoven/sbdomwatch/internal/store"
 	"github.com/sbroekhoven/sbdomwatch/internal/watch"
@@ -30,6 +31,7 @@ type Store interface {
 	PatchWatch(ctx context.Context, domain string, p watch.PatchRequest, actor string) (watch.Watch, error)
 	ArchiveWatch(ctx context.Context, domain, actor string) (watch.Watch, error)
 	DeleteWatch(ctx context.Context, domain, actor string) error
+	History(ctx context.Context, domain string, since time.Time, limit int) ([]store.TimelineEntry, error)
 }
 
 // BulkRequest is the body of POST /v1/watches:bulk.
@@ -58,6 +60,7 @@ func (s *Server) routes(mux *http.ServeMux) {
 	v1.HandleFunc("GET /v1/watches/{domain}", s.handleGet)
 	v1.HandleFunc("PATCH /v1/watches/{domain}", s.handlePatch)
 	v1.HandleFunc("DELETE /v1/watches/{domain}", s.handleDelete)
+	v1.HandleFunc("GET /v1/watches/{domain}/history", s.handleHistory)
 	mux.Handle("/v1/", s.requireToken(v1))
 }
 

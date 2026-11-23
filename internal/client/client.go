@@ -11,6 +11,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -121,6 +122,21 @@ func (c *Client) PatchWatch(ctx context.Context, domain string, p watch.PatchReq
 func (c *Client) ArchiveWatch(ctx context.Context, domain string) (watch.Watch, error) {
 	var out watch.Watch
 	err := c.do(ctx, http.MethodDelete, watchPath(domain), nil, nil, &out)
+	return out, err
+}
+
+// History returns observations and events of a watch, newest first. since
+// is passed through: an RFC 3339 time, a duration like 24h or days like 7d.
+func (c *Client) History(ctx context.Context, domain, since string, limit int) (api.HistoryResponse, error) {
+	q := url.Values{}
+	if since != "" {
+		q.Set("since", since)
+	}
+	if limit > 0 {
+		q.Set("limit", strconv.Itoa(limit))
+	}
+	var out api.HistoryResponse
+	err := c.do(ctx, http.MethodGet, watchPath(domain)+"/history", q, nil, &out)
 	return out, err
 }
 
