@@ -34,6 +34,14 @@ func (a *app) showCmd() *cobra.Command {
 			row("Next check:", formatTime(w.NextCheckAt))
 			row("Baseline started:", formatTimePtr(w.BaselineStartedAt))
 			row("Baseline completed:", formatTimePtr(w.BaselineCompletedAt))
+			if w.Template == "owned" {
+				confirmed := "no (review, then: sbdomwatch confirm " + w.Domain + ")"
+				if w.BaselineConfirmedAt != nil {
+					confirmed = formatTime(*w.BaselineConfirmedAt) + " by " + w.BaselineConfirmedBy
+				}
+				row("Baseline confirmed:", confirmed)
+			}
+			row("Last observed:", formatTimePtr(w.LastObservedAt))
 			if w.ExpiresAt != nil {
 				row("Expires:", formatTime(*w.ExpiresAt))
 			}

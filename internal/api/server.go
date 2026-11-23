@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/sbroekhoven/sbdomwatch/internal/diff"
+	"github.com/sbroekhoven/sbdomwatch/internal/events"
 	"github.com/sbroekhoven/sbdomwatch/internal/watch"
 )
 
@@ -22,6 +24,12 @@ type Deps struct {
 	Defaults watch.Defaults
 	Log      *slog.Logger
 	Now      func() time.Time // defaults to time.Now
+
+	// For rebaseline: facts per check, sinks per event, and a hook called
+	// after events were stored (to wake the outbox).
+	Extractors map[string]diff.Extractor
+	Route      func(events.Event) []string
+	OnEvents   func()
 }
 
 // Server is the HTTP API server.
@@ -32,11 +40,16 @@ type Server struct {
 	defaults watch.Defaults
 	now      func() time.Time
 	http     *http.Server
+
+	extractors map[string]diff.Extractor
+	route      func(events.Event) []string
+	onEvents   func()
 }
 
 // New returns a server that will listen on addr.
 func New(addr string, d Deps) *Server {
-	s := &Server{log: d.Log, store: d.Store, token: d.Token, defaults: d.Defaults, now: d.Now}
+	s := &Server{log: d.Log, store: d.Store, token: d.Token, defaults: d.Defaults, now: d.Now,
+		extractors: d.Extractors, route: d.Route, onEvents: d.OnEvents}
 	if s.now == nil {
 		s.now = time.Now
 	}

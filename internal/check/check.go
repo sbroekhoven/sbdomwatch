@@ -9,6 +9,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"time"
+
+	"github.com/sbroekhoven/sbdomwatch/internal/diff"
 )
 
 // Check observes one aspect of a domain.
@@ -39,4 +41,26 @@ func NewObservation(name string, at time.Time, data any) (Observation, error) {
 	}
 	sum := sha256.Sum256(b)
 	return Observation{Check: name, ObservedAt: at.UTC(), Data: b, Hash: hex.EncodeToString(sum[:])}, nil
+}
+
+// Facts extracts and merges the facts of observations with the extractor
+// registered for each check. A check without an extractor, or whose data
+// cannot be read, contributes nothing: its fields count as unknown. Read
+// errors are returned for logging.
+func Facts(obs []Observation, extractors map[string]diff.Extractor) (diff.Facts, []error) {
+	parts := make([]diff.Facts, 0, len(obs))
+	var errs []error
+	for _, o := range obs {
+		ex, ok := extractors[o.Check]
+		if !ok {
+			continue
+		}
+		f, err := ex(o.Data)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("%s: %w", o.Check, err))
+			continue
+		}
+		parts = append(parts, f)
+	}
+	return diff.Merge(parts...), errs
 }

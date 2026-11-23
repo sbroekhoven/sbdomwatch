@@ -51,7 +51,7 @@ func (a *app) serveCmd() *cobra.Command {
 				return err
 			}
 			defer st.Close()
-			srv := api.New(cfg.Listen, api.Deps{Store: st, Token: cfg.Token, Defaults: cfg.WatchDefaults(), Log: log})
+			extractors := map[string]diff.Extractor{dnscheck.Name: dnscheck.Facts, rdapcheck.Name: rdapcheck.Facts}
 			dnsLimiter := ratelimit.New(cfg.RateLimits.DNSPerSec, int(math.Ceil(cfg.RateLimits.DNSPerSec)), nil)
 			sinks := buildSinks(cfg, a.version)
 			outbox := events.NewDispatcher(events.DispatcherConfig{
@@ -65,7 +65,7 @@ func (a *app) serveCmd() *cobra.Command {
 					dnscheck.New(dnscheck.Config{Resolvers: cfg.Resolvers, Limiter: dnsLimiter}),
 					rdapcheck.New(rdapcheck.NewClient(cfg.RateLimits.RDAPPerSecPerRegistry, "sbdomwatch/"+a.version), nil),
 				},
-				Extractors: map[string]diff.Extractor{dnscheck.Name: dnscheck.Facts, rdapcheck.Name: rdapcheck.Facts},
+				Extractors: extractors,
 				Lifecycle: watch.LifecycleConfig{
 					BaselineObservations: cfg.Defaults.BaselineObservations,
 					Debounce:             cfg.Defaults.DebounceObservations,
@@ -78,6 +78,10 @@ func (a *app) serveCmd() *cobra.Command {
 				Log:         log.With("component", "scheduler"),
 				Workers:     cfg.Scheduler.Workers,
 				Tick:        cfg.Scheduler.Tick,
+			})
+			srv := api.New(cfg.Listen, api.Deps{
+				Store: st, Token: cfg.Token, Defaults: cfg.WatchDefaults(), Log: log,
+				Extractors: extractors, Route: events.Router(sinks), OnEvents: outbox.Notify,
 			})
 			if err := runAll(ctx, srv.Run, sc.Run, outbox.Run); err != nil {
 				return err

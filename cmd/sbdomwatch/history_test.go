@@ -170,3 +170,57 @@ func TestEventsCLI(t *testing.T) {
 		t.Errorf("bad type exit = %d", code)
 	}
 }
+
+func TestConfirmAndRebaselineCLI(t *testing.T) {
+	e := newCLIEnv(t)
+	clock := &testClock{t: time.Now().UTC().Truncate(time.Second)}
+	dns := &fakeDNS{now: clock.Now, a: []string{"192.0.2.1"}}
+	s := sched.New(sched.Config{
+		Store: e.st, Checks: []check.Check{dns}, Log: slog.New(slog.DiscardHandler),
+		Extractors: map[string]diff.Extractor{dnscheck.Name: dnscheck.Facts},
+		Lifecycle:  watch.LifecycleConfig{BaselineObservations: 1, Debounce: 2},
+		Now:        clock.Now, Rand: func() float64 { return 0.5 },
+	})
+	round := func() {
+		t.Helper()
+		if _, err := s.RunOnce(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		clock.Advance(time.Hour)
+	}
+	run := func(wantCode int, want string, args ...string) {
+		t.Helper()
+		code, out, errOut := e.run(args...)
+		if code != wantCode || !strings.Contains(out+errOut, want) {
+			t.Fatalf("%v: code %d, want %d; output %q, want %q", args, code, wantCode, out+errOut, want)
+		}
+	}
+
+	run(0, "added", "add", "example.com", "--template", "owned", "--reason", "company domain")
+	run(0, "added", "add", "squat.com", "--template", "candidate", "--reason", "x", "--origin", "typosquat")
+	run(exitError, "baseline is not complete", "confirm", "example.com")
+	round()
+	run(0, "active*", "ls")
+	run(0, "Baseline confirmed:  no", "show", "example.com")
+	run(0, "baseline confirmed by seb", "confirm", "example.com")
+	run(0, "Baseline confirmed:  20", "show", "example.com")
+	run(exitError, "only owned watches", "confirm", "squat.com")
+	run(exitNotFound, "not found", "confirm", "nope.com")
+
+	// A change is pending (seen once); rebaseline accepts it without an event.
+	dns.setA("192.0.2.1", "192.0.2.2")
+	round()
+	run(0, "new baseline accepted", "rebaseline", "example.com")
+	round()
+	round()
+	code, out, _ := e.run("events", "--since", "", "--domain", "example.com", "-o", "json")
+	if code != 0 || strings.Contains(out, "record_changed") || strings.Count(out, `"rebaseline": true`) != 1 {
+		t.Fatalf("after rebaseline events:\n%s", out)
+	}
+	if code, out, _ := e.run("show", "example.com"); code != 0 || !strings.Contains(out, "Baseline confirmed:  no") {
+		t.Errorf("rebaseline must clear the confirmation:\n%s", out)
+	}
+
+	run(0, "baselining again from scratch (new)", "rebaseline", "example.com", "--relearn")
+	run(0, "new", "ls", "--state", "new")
+}

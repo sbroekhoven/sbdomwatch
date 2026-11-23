@@ -59,6 +59,8 @@ func (s *Server) writeErr(w http.ResponseWriter, r *http.Request, err error) {
 		writeError(w, http.StatusNotFound, CodeNotFound, err.Error(), nil)
 	case errors.Is(err, watch.ErrArchived):
 		writeError(w, http.StatusConflict, CodeConflict, "watch is archived; add it again to reactivate it", nil)
+	case errors.Is(err, watch.ErrNotOwned), errors.Is(err, watch.ErrNoBaseline):
+		writeError(w, http.StatusConflict, CodeConflict, err.Error(), nil)
 	default:
 		s.log.ErrorContext(r.Context(), "request failed", "method", r.Method, "path", r.URL.Path, "err", err)
 		writeError(w, http.StatusInternalServerError, CodeInternal, "internal error", nil)

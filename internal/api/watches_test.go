@@ -452,3 +452,33 @@ func TestEvents(t *testing.T) {
 		t.Errorf("events without token: %d", rec.Code)
 	}
 }
+
+func TestActions(t *testing.T) {
+	a := newTestAPI(t)
+	a.do(http.MethodPost, "/v1/watches", `{"domain":"a.com","template":"owned","reason":"x"}`)
+	tests := []struct {
+		name, path, body string
+		want             int
+	}{
+		{"confirm before baseline", "/v1/watches/a.com:confirm", "", 409},
+		{"rebaseline before baseline", "/v1/watches/a.com:rebaseline", "", 409},
+		{"relearn is allowed any time", "/v1/watches/A.COM.:rebaseline", `{"relearn":true}`, 200},
+		{"unknown verb", "/v1/watches/a.com:explode", "", 404},
+		{"no verb", "/v1/watches/a.com", "", 405},
+		{"bad domain", "/v1/watches/localhost:confirm", "", 400},
+		{"missing watch", "/v1/watches/nope.com:confirm", "", 404},
+		{"bad body", "/v1/watches/a.com:rebaseline", `{"relearn":"yes"}`, 400},
+		{"unknown field", "/v1/watches/a.com:rebaseline", `{"force":true}`, 400},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if rec := a.do(http.MethodPost, tt.path, tt.body); rec.Code != tt.want {
+				t.Errorf("status = %d, want %d: %s", rec.Code, tt.want, rec.Body)
+			}
+		})
+	}
+	log, _ := a.st.AuditLog(t.Context(), 1)
+	if len(log) != 1 || log[0].Action != "watch.relearn" {
+		t.Errorf("audit = %+v", log)
+	}
+}

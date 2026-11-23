@@ -10,7 +10,10 @@ import (
 	"testing"
 
 	"github.com/sbroekhoven/sbdomwatch/internal/api"
+	dnscheck "github.com/sbroekhoven/sbdomwatch/internal/check/dns"
+	rdapcheck "github.com/sbroekhoven/sbdomwatch/internal/check/rdap"
 	"github.com/sbroekhoven/sbdomwatch/internal/config"
+	"github.com/sbroekhoven/sbdomwatch/internal/diff"
 	"github.com/sbroekhoven/sbdomwatch/internal/store"
 	"github.com/sbroekhoven/sbdomwatch/internal/watch"
 )
@@ -33,6 +36,7 @@ func newCLIEnv(t *testing.T) *cliEnv {
 	cfg := config.Default()
 	srv := httptest.NewServer(api.New(":0", api.Deps{
 		Store: st, Token: cliToken, Defaults: cfg.WatchDefaults(), Log: slog.New(slog.DiscardHandler),
+		Extractors: map[string]diff.Extractor{dnscheck.Name: dnscheck.Facts, rdapcheck.Name: rdapcheck.Facts},
 	}).Handler())
 	t.Cleanup(srv.Close)
 	return &cliEnv{t: t, st: st, env: map[string]string{

@@ -177,6 +177,21 @@ func (c *Client) Events(ctx context.Context, o EventOptions) ([]events.Event, er
 	return out.Events, err
 }
 
+// Confirm records that the caller checked the baseline of an owned watch.
+func (c *Client) Confirm(ctx context.Context, domain string) (watch.Watch, error) {
+	var out watch.Watch
+	err := c.do(ctx, http.MethodPost, watchPath(domain)+":confirm", nil, nil, &out)
+	return out, err
+}
+
+// Rebaseline accepts the latest observation as the new baseline, or with
+// relearn restarts baselining.
+func (c *Client) Rebaseline(ctx context.Context, domain string, relearn bool) (watch.Watch, error) {
+	var out watch.Watch
+	err := c.do(ctx, http.MethodPost, watchPath(domain)+":rebaseline", nil, api.RebaselineRequest{Relearn: relearn}, &out)
+	return out, err
+}
+
 // watchPath is unescaped; do escapes it. A "/" in domain cannot form a
 // valid name, so the server rejects it either way.
 func watchPath(domain string) string { return "/v1/watches/" + domain }

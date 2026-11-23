@@ -202,24 +202,13 @@ func (s *Scheduler) checkOne(ctx context.Context, d store.Due) {
 	}
 }
 
-// facts extracts and merges the facts of every observation. A check without
-// an extractor, or whose data cannot be read, contributes no facts, so its
-// fields count as unknown.
+// facts extracts the facts of every observation; see check.Facts.
 func (s *Scheduler) facts(obs []check.Observation, log *slog.Logger) diff.Facts {
-	parts := make([]diff.Facts, 0, len(obs))
-	for _, o := range obs {
-		ex, ok := s.cfg.Extractors[o.Check]
-		if !ok {
-			continue
-		}
-		f, err := ex(o.Data)
-		if err != nil {
-			log.Warn("cannot extract facts", "check", o.Check, "err", err)
-			continue
-		}
-		parts = append(parts, f)
+	f, errs := check.Facts(obs, s.cfg.Extractors)
+	for _, err := range errs {
+		log.Warn("cannot extract facts", "err", err)
 	}
-	return diff.Merge(parts...)
+	return f
 }
 
 // next returns now + d with +/- Jitter, rounded down to whole seconds.

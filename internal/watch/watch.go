@@ -154,8 +154,13 @@ func (e *ValidationError) err() error {
 	return e
 }
 
-// ErrArchived is returned when changing an archived watch.
-var ErrArchived = errors.New("watch is archived")
+// Errors for operations that do not fit the watch's current state. The API
+// answers them with 409 Conflict.
+var (
+	ErrArchived   = errors.New("watch is archived")
+	ErrNotOwned   = errors.New("only owned watches have a baseline to confirm")
+	ErrNoBaseline = errors.New("the baseline is not complete yet")
+)
 
 // AddRequest is the input for adding or merging a watch.
 type AddRequest struct {

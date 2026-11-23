@@ -87,65 +87,147 @@ type ProcessFunc func(w watch.Watch, st diff.State) (CheckResult, error)
 func (s *Store) ApplyCheck(ctx context.Context, watchID int64, process ProcessFunc) ([]events.Event, error) {
 	var stored []events.Event
 	err := s.writeTx(ctx, func(tx *sql.Tx) error {
-		ws, err := queryWatches(ctx, tx, selectWatch+" WHERE w.id = ?", watchID)
+		w, st, err := loadWithState(ctx, tx, selectWatch+" WHERE w.id = ?", watchID)
 		if err != nil {
 			return err
 		}
-		if len(ws) == 0 {
-			return fmt.Errorf("watch %d: %w", watchID, ErrNotFound)
-		}
-		var raw string
-		if err := tx.QueryRowContext(ctx, `SELECT diff_state FROM watches WHERE id = ?`, watchID).Scan(&raw); err != nil {
-			return fmt.Errorf("store: read diff state: %w", err)
-		}
-		var st diff.State
-		if err := json.Unmarshal([]byte(raw), &st); err != nil {
-			return fmt.Errorf("store: decode diff state of %s: %w", ws[0].Domain, err)
-		}
-
-		res, err := process(ws[0], st)
+		res, err := process(w, st)
 		if err != nil {
 			return err
 		}
-		res.Watch.ID = watchID
-		res.Watch.NextCheckAt = res.Next
-		for _, o := range res.Observations {
-			if t := o.ObservedAt.UTC().Truncate(time.Second); res.Watch.LastObservedAt == nil || t.After(*res.Watch.LastObservedAt) {
-				res.Watch.LastObservedAt = &t
-			}
-		}
-		if _, err := saveWatch(ctx, tx, res.Watch); err != nil {
-			return err
-		}
-		stJSON, err := json.Marshal(res.Diff)
-		if err != nil {
-			return fmt.Errorf("store: encode diff state: %w", err)
-		}
-		if _, err := tx.ExecContext(ctx, `UPDATE watches SET diff_state = ? WHERE id = ?`, string(stJSON), watchID); err != nil {
-			return fmt.Errorf("store: write diff state: %w", err)
-		}
-		for _, o := range res.Observations {
-			_, err := tx.ExecContext(ctx, `INSERT INTO observations (watch_id, check_name, observed_at, is_baseline, data, hash)
-				VALUES (?, ?, ?, ?, ?, ?)`, watchID, o.Check, formatTime(o.ObservedAt), res.Baseline, string(o.Data), o.Hash)
-			if err != nil {
-				return fmt.Errorf("store: insert observation: %w", err)
-			}
-		}
-		for i, e := range res.Events {
-			e.WatchID = watchID
-			var sinks []string
-			if i < len(res.Routes) {
-				sinks = res.Routes[i]
-			}
-			if e, err = insertEvent(ctx, tx, e, sinks); err != nil {
-				return err
-			}
-			stored = append(stored, e)
-		}
-		return nil
+		stored, err = applyResult(ctx, tx, w.ID, res)
+		return err
 	})
 	if err != nil {
 		return nil, err
+	}
+	return stored, nil
+}
+
+// UpdateFunc changes a watch outside a check round (confirm, rebaseline).
+// latest holds the newest observation of each check. Next may be zero to
+// keep Watch.NextCheckAt as returned.
+type UpdateFunc func(w watch.Watch, st diff.State, latest []check.Observation) (CheckResult, error)
+
+// UpdateWatch loads a watch by domain with its diff state and latest
+// observations, lets fn decide, and stores the result with an audit entry
+// for action, all in one transaction.
+func (s *Store) UpdateWatch(ctx context.Context, domain, actor, action string, fn UpdateFunc) (watch.Watch, []events.Event, error) {
+	var (
+		out    watch.Watch
+		stored []events.Event
+	)
+	err := s.writeTx(ctx, func(tx *sql.Tx) error {
+		w, st, err := loadWithState(ctx, tx, selectWatch+" WHERE w.domain = ?", domain)
+		if err != nil {
+			return err
+		}
+		latest, err := latestObservations(ctx, tx, w.ID)
+		if err != nil {
+			return err
+		}
+		res, err := fn(w, st, latest)
+		if err != nil {
+			return err
+		}
+		if res.Next.IsZero() {
+			res.Next = res.Watch.NextCheckAt
+		}
+		if stored, err = applyResult(ctx, tx, w.ID, res); err != nil {
+			return err
+		}
+		out = res.Watch
+		out.ID = w.ID
+		return audit(ctx, tx, s.now(), actor, action, w.ID, map[string]any{"domain": w.Domain, "from_state": w.State, "to_state": res.Watch.State})
+	})
+	if err != nil {
+		return watch.Watch{}, nil, err
+	}
+	return out, stored, nil
+}
+
+func loadWithState(ctx context.Context, tx *sql.Tx, query string, arg any) (watch.Watch, diff.State, error) {
+	ws, err := queryWatches(ctx, tx, query, arg)
+	if err != nil {
+		return watch.Watch{}, diff.State{}, err
+	}
+	if len(ws) == 0 {
+		return watch.Watch{}, diff.State{}, fmt.Errorf("watch %v: %w", arg, ErrNotFound)
+	}
+	var raw string
+	if err := tx.QueryRowContext(ctx, `SELECT diff_state FROM watches WHERE id = ?`, ws[0].ID).Scan(&raw); err != nil {
+		return watch.Watch{}, diff.State{}, fmt.Errorf("store: read diff state: %w", err)
+	}
+	var st diff.State
+	if err := json.Unmarshal([]byte(raw), &st); err != nil {
+		return watch.Watch{}, diff.State{}, fmt.Errorf("store: decode diff state of %s: %w", ws[0].Domain, err)
+	}
+	return ws[0], st, nil
+}
+
+func latestObservations(ctx context.Context, tx *sql.Tx, watchID int64) ([]check.Observation, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT check_name, observed_at, data, hash FROM observations o
+		WHERE watch_id = ? AND id = (SELECT MAX(id) FROM observations WHERE watch_id = o.watch_id AND check_name = o.check_name)
+		ORDER BY check_name`, watchID)
+	if err != nil {
+		return nil, fmt.Errorf("store: latest observations: %w", err)
+	}
+	defer rows.Close()
+	var out []check.Observation
+	for rows.Next() {
+		var (
+			o        check.Observation
+			at, data string
+		)
+		if err := rows.Scan(&o.Check, &at, &data, &o.Hash); err != nil {
+			return nil, fmt.Errorf("store: scan observation: %w", err)
+		}
+		if o.ObservedAt, err = parseTime(at); err != nil {
+			return nil, err
+		}
+		o.Data = json.RawMessage(data)
+		out = append(out, o)
+	}
+	return out, rows.Err()
+}
+
+// applyResult writes a CheckResult for watchID and returns the stored events.
+func applyResult(ctx context.Context, tx *sql.Tx, watchID int64, res CheckResult) ([]events.Event, error) {
+	res.Watch.ID = watchID
+	res.Watch.NextCheckAt = res.Next
+	for _, o := range res.Observations {
+		if t := o.ObservedAt.UTC().Truncate(time.Second); res.Watch.LastObservedAt == nil || t.After(*res.Watch.LastObservedAt) {
+			res.Watch.LastObservedAt = &t
+		}
+	}
+	if _, err := saveWatch(ctx, tx, res.Watch); err != nil {
+		return nil, err
+	}
+	stJSON, err := json.Marshal(res.Diff)
+	if err != nil {
+		return nil, fmt.Errorf("store: encode diff state: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE watches SET diff_state = ? WHERE id = ?`, string(stJSON), watchID); err != nil {
+		return nil, fmt.Errorf("store: write diff state: %w", err)
+	}
+	for _, o := range res.Observations {
+		_, err := tx.ExecContext(ctx, `INSERT INTO observations (watch_id, check_name, observed_at, is_baseline, data, hash)
+			VALUES (?, ?, ?, ?, ?, ?)`, watchID, o.Check, formatTime(o.ObservedAt), res.Baseline, string(o.Data), o.Hash)
+		if err != nil {
+			return nil, fmt.Errorf("store: insert observation: %w", err)
+		}
+	}
+	var stored []events.Event
+	for i, e := range res.Events {
+		e.WatchID = watchID
+		var sinks []string
+		if i < len(res.Routes) {
+			sinks = res.Routes[i]
+		}
+		if e, err = insertEvent(ctx, tx, e, sinks); err != nil {
+			return nil, err
+		}
+		stored = append(stored, e)
 	}
 	return stored, nil
 }

@@ -70,6 +70,7 @@ type Payload struct {
 	Inventory      map[string][]string `json:"inventory,omitempty"`
 	VolatileFields []string            `json:"volatile_fields,omitempty"`
 	Observations   int                 `json:"observations,omitempty"`
+	Rebaseline     bool                `json:"rebaseline,omitempty"` // accepted by hand, see sbdomwatch rebaseline
 }
 
 // Event is one stored event.
