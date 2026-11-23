@@ -29,7 +29,7 @@ func req(t *testing.T, r AddRequest) AddRequest {
 }
 
 func TestApplyNew(t *testing.T) {
-	r := req(t, AddRequest{Domain: "degir0.com", Template: TemplateCandidate, Reason: "seen in CT", Tags: map[string]string{"profile": "degiro"}})
+	r := req(t, AddRequest{Domain: "degir0.com", Template: TemplateCandidate, Reason: "seen in CT", Origin: OriginTyposquat, Tags: map[string]string{"profile": "degiro"}})
 	w, created, changed := Apply(nil, r, "seb", t0, defaults)
 	if !created || !changed {
 		t.Fatalf("created=%v changed=%v", created, changed)
@@ -40,7 +40,7 @@ func TestApplyNew(t *testing.T) {
 	if w.ExpiresAt == nil || !w.ExpiresAt.Equal(t0.Add(defaults.CandidateTTL)) {
 		t.Errorf("candidate expiry = %v", w.ExpiresAt)
 	}
-	if len(w.Origins) != 1 || w.Origins[0].AddedBy != "seb" || w.Origins[0].Origin != OriginManual {
+	if len(w.Origins) != 1 || w.Origins[0].AddedBy != "seb" || w.Origins[0].Origin != OriginTyposquat {
 		t.Errorf("origins = %+v", w.Origins)
 	}
 	if w.Tags["profile"] != "degiro" {
@@ -49,7 +49,7 @@ func TestApplyNew(t *testing.T) {
 }
 
 func TestApplyMerge(t *testing.T) {
-	base, _, _ := Apply(nil, req(t, AddRequest{Domain: "example.com", Template: TemplateCandidate, Reason: "r1", Tags: map[string]string{"a": "1", "b": "1"}}), "seb", t0, defaults)
+	base, _, _ := Apply(nil, req(t, AddRequest{Domain: "example.com", Template: TemplateCandidate, Reason: "r1", Origin: OriginTyposquat, Tags: map[string]string{"a": "1", "b": "1"}}), "seb", t0, defaults)
 
 	tests := []struct {
 		name        string
@@ -60,7 +60,7 @@ func TestApplyMerge(t *testing.T) {
 	}{
 		{
 			name:        "same request is a no-op",
-			in:          AddRequest{Domain: "example.com", Template: TemplateCandidate, Reason: "r1", Tags: map[string]string{"a": "1"}},
+			in:          AddRequest{Domain: "example.com", Template: TemplateCandidate, Reason: "r1", Origin: OriginTyposquat, Tags: map[string]string{"a": "1"}},
 			wantChanged: false,
 			check: func(t *testing.T, w Watch) {
 				if len(w.Origins) != 1 || !w.UpdatedAt.Equal(t0) {
@@ -82,6 +82,16 @@ func TestApplyMerge(t *testing.T) {
 			},
 		},
 		{
+			name:        "a manual origin stops expiry",
+			in:          AddRequest{Domain: "example.com", Template: TemplateCandidate, Reason: "keep this one", Origin: OriginManual},
+			wantChanged: true,
+			check: func(t *testing.T, w Watch) {
+				if w.ExpiresAt != nil {
+					t.Errorf("manual candidate expires at %v", w.ExpiresAt)
+				}
+			},
+		},
+		{
 			name:        "same reason other origin kind is a new origin",
 			in:          AddRequest{Domain: "example.com", Template: TemplateCandidate, Reason: "r1", Origin: OriginIntel},
 			wantChanged: true,
@@ -93,7 +103,7 @@ func TestApplyMerge(t *testing.T) {
 		},
 		{
 			name:        "tags merge, new values win",
-			in:          AddRequest{Domain: "example.com", Template: TemplateCandidate, Reason: "r1", Tags: map[string]string{"b": "2", "c": "3"}},
+			in:          AddRequest{Domain: "example.com", Template: TemplateCandidate, Reason: "r1", Origin: OriginTyposquat, Tags: map[string]string{"b": "2", "c": "3"}},
 			wantChanged: true,
 			check: func(t *testing.T, w Watch) {
 				if w.Tags["a"] != "1" || w.Tags["b"] != "2" || w.Tags["c"] != "3" {
@@ -119,7 +129,7 @@ func TestApplyMerge(t *testing.T) {
 				w.ExpiresAt = nil
 				return w
 			},
-			in:          AddRequest{Domain: "example.com", Template: TemplateCandidate, Reason: "r1"},
+			in:          AddRequest{Domain: "example.com", Template: TemplateCandidate, Reason: "r1", Origin: OriginTyposquat},
 			wantChanged: false,
 			check: func(t *testing.T, w Watch) {
 				if w.Template != TemplateOwned || w.ExpiresAt != nil {
@@ -129,7 +139,7 @@ func TestApplyMerge(t *testing.T) {
 		},
 		{
 			name:        "explicit interval wins",
-			in:          AddRequest{Domain: "example.com", Template: TemplateCandidate, Reason: "r1", IntervalSec: 600},
+			in:          AddRequest{Domain: "example.com", Template: TemplateCandidate, Reason: "r1", Origin: OriginTyposquat, IntervalSec: 600},
 			wantChanged: true,
 			check: func(t *testing.T, w Watch) {
 				if w.IntervalSec != 600 {
@@ -147,7 +157,7 @@ func TestApplyMerge(t *testing.T) {
 				w.VolatileFields = []string{"dns.a"}
 				return w
 			},
-			in:          AddRequest{Domain: "example.com", Template: TemplateCandidate, Reason: "back"},
+			in:          AddRequest{Domain: "example.com", Template: TemplateCandidate, Reason: "back", Origin: OriginTyposquat},
 			wantChanged: true,
 			check: func(t *testing.T, w Watch) {
 				if w.State != StateNew || w.BaselineCompletedAt != nil || len(w.VolatileFields) != 0 || !w.NextCheckAt.Equal(t1) {
@@ -162,7 +172,7 @@ func TestApplyMerge(t *testing.T) {
 				w.State = StatePaused
 				return w
 			},
-			in:          AddRequest{Domain: "example.com", Template: TemplateCandidate, Reason: "again"},
+			in:          AddRequest{Domain: "example.com", Template: TemplateCandidate, Reason: "again", Origin: OriginTyposquat},
 			wantChanged: true,
 			check: func(t *testing.T, w Watch) {
 				if w.State != StatePaused {
@@ -256,5 +266,29 @@ func TestArchive(t *testing.T) {
 	}
 	if _, changed := Archive(w, t1); changed {
 		t.Error("archiving twice reported a change")
+	}
+}
+
+func TestExpires(t *testing.T) {
+	tests := []struct {
+		tmpl    Template
+		origins []OriginKind
+		want    bool
+	}{
+		{TemplateCandidate, []OriginKind{OriginTyposquat}, true},
+		{TemplateCandidate, []OriginKind{OriginTyposquat, OriginIntel}, true},
+		{TemplateCandidate, []OriginKind{OriginTyposquat, OriginManual}, false},
+		{TemplateCandidate, []OriginKind{OriginManual}, false},
+		{TemplateOwned, []OriginKind{OriginTyposquat}, false},
+		{TemplateThirdParty, []OriginKind{OriginIntel}, false},
+	}
+	for _, tt := range tests {
+		w := Watch{Template: tt.tmpl}
+		for _, o := range tt.origins {
+			w.Origins = append(w.Origins, Origin{Origin: o})
+		}
+		if got := Expires(w); got != tt.want {
+			t.Errorf("%s %v: Expires = %v, want %v", tt.tmpl, tt.origins, got, tt.want)
+		}
 	}
 }

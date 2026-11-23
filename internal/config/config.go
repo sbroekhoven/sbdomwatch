@@ -71,6 +71,7 @@ type Defaults struct {
 	DebounceObservations int           `yaml:"debounce_observations"`
 	Intervals            Intervals     `yaml:"intervals"`
 	CandidateTTL         time.Duration `yaml:"candidate_ttl"`
+	ExpiryWarning        time.Duration `yaml:"expiry_warning"` // owned domains: warn this long before expiry
 }
 
 // Intervals is the check interval per watch template.
@@ -120,7 +121,8 @@ func Default() Server {
 				Candidate:  6 * time.Hour,
 				ThirdParty: 6 * time.Hour,
 			},
-			CandidateTTL: 90 * 24 * time.Hour,
+			CandidateTTL:  90 * 24 * time.Hour,
+			ExpiryWarning: 30 * 24 * time.Hour,
 		},
 		Scheduler: Scheduler{Workers: 8, Tick: 5 * time.Second},
 		Sinks: Sinks{
@@ -259,6 +261,9 @@ func (c Server) Validate() error {
 	}
 	if c.Scheduler.Tick < time.Second || c.Scheduler.Tick > 5*time.Minute {
 		errs = append(errs, errors.New("scheduler.tick must be between 1s and 5m"))
+	}
+	if c.Defaults.ExpiryWarning < 0 {
+		errs = append(errs, errors.New("defaults.expiry_warning must be >= 0 (0 disables)"))
 	}
 	if c.Defaults.CandidateTTL < 24*time.Hour {
 		errs = append(errs, errors.New("defaults.candidate_ttl must be >= 24h"))

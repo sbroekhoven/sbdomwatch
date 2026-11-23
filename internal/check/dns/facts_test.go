@@ -66,3 +66,40 @@ func TestFactsAbsent(t *testing.T) {
 		t.Error("want error for bad JSON")
 	}
 }
+
+func TestFactsDangling(t *testing.T) {
+	cname := func(rc string, vals ...string) RRSet {
+		s := RRSet{Rcode: rc, Values: []Value{}}
+		for _, v := range vals {
+			s.Values = append(s.Values, Value{Value: v, TTL: 300})
+		}
+		return s
+	}
+	tests := []struct {
+		name    string
+		rec     map[string]RRSet
+		want    []string
+		unknown bool
+	}{
+		{"no cname", map[string]RRSet{"CNAME": cname("NOERROR"), "A": cname("NOERROR", "1.2.3.4"), "AAAA": cname("NOERROR")}, []string{}, false},
+		{"cname resolves", map[string]RRSet{"CNAME": cname("NOERROR", "app.herokudns.com"), "A": cname("NOERROR", "1.2.3.4"), "AAAA": cname("NOERROR")}, []string{}, false},
+		{"cname target gone", map[string]RRSet{"CNAME": cname("NOERROR", "old-app.herokudns.com"), "A": cname("NXDOMAIN"), "AAAA": cname("NXDOMAIN")}, []string{"old-app.herokudns.com"}, false},
+		{"only A nxdomain", map[string]RRSet{"CNAME": cname("NOERROR", "x.example"), "A": cname("NXDOMAIN"), "AAAA": cname("NOERROR")}, []string{}, false},
+		{"A lookup failed", map[string]RRSet{"CNAME": cname("NOERROR", "x.example"), "A": {Error: "timeout"}, "AAAA": cname("NXDOMAIN")}, nil, true},
+		{"cname lookup failed", map[string]RRSet{"CNAME": {Error: "timeout"}, "A": cname("NXDOMAIN"), "AAAA": cname("NXDOMAIN")}, nil, true},
+		{"name itself nxdomain", map[string]RRSet{"CNAME": cname("NXDOMAIN"), "A": cname("NXDOMAIN"), "AAAA": cname("NXDOMAIN")}, []string{}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			raw, _ := json.Marshal(Data{Records: tt.rec})
+			f, err := Facts(raw)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, ok := f.Values["dns.dangling"]
+			if ok == tt.unknown || (!tt.unknown && !slices.Equal(got, tt.want)) {
+				t.Errorf("dns.dangling = %v (known %v), want %v (unknown %v)", got, ok, tt.want, tt.unknown)
+			}
+		})
+	}
+}

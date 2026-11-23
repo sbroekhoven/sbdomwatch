@@ -23,6 +23,9 @@ type Facts struct {
 	// Exists is true when an authoritative source (RDAP) says the domain
 	// is registered; it overrides Absent from other sources.
 	Exists bool
+	// Meta holds values that are passed along but never compared, such as
+	// "rdap.expiry" (RFC 3339).
+	Meta map[string]string
 }
 
 // Extractor turns one check's observation data into facts.
@@ -32,9 +35,10 @@ type Extractor func(data json.RawMessage) (Facts, error)
 // check prefixes its own. The result is absent when some check says so and
 // none says the domain exists.
 func Merge(fs ...Facts) Facts {
-	out := Facts{Values: map[string][]string{}}
+	out := Facts{Values: map[string][]string{}, Meta: map[string]string{}}
 	for _, f := range fs {
 		maps.Copy(out.Values, f.Values)
+		maps.Copy(out.Meta, f.Meta)
 		out.Absent = out.Absent || f.Absent
 		out.Exists = out.Exists || f.Exists
 	}
@@ -69,6 +73,9 @@ type State struct {
 	Pending map[string]Pending `json:"pending,omitempty"`
 	// Samples collects facts while baselining, oldest first.
 	Samples []map[string][]string `json:"samples,omitempty"`
+	// Flags remember one-shot notices, e.g. which expiry date was warned
+	// about. Compare keeps them; a new baseline clears them.
+	Flags map[string]string `json:"flags,omitempty"`
 }
 
 // ChangeKind says how a path changed.
@@ -131,7 +138,7 @@ type CompareOptions struct {
 func Compare(st State, facts map[string][]string, o CompareOptions) (State, []Change) {
 	debounce := max(o.Debounce, 1)
 	volatile := o.Volatile
-	out := State{Baseline: maps.Clone(st.Baseline), Pending: maps.Clone(st.Pending)}
+	out := State{Baseline: maps.Clone(st.Baseline), Pending: maps.Clone(st.Pending), Flags: maps.Clone(st.Flags)}
 	if out.Baseline == nil {
 		out.Baseline = map[string][]string{}
 	}

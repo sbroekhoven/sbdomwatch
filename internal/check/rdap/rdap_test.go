@@ -115,6 +115,7 @@ func TestRun(t *testing.T) {
 }
 
 func TestFacts(t *testing.T) {
+	exp := time.Date(2027, 2, 3, 4, 5, 6, 0, time.UTC)
 	enc := func(d Data) json.RawMessage { b, _ := json.Marshal(d); return b }
 	tests := []struct {
 		name   string
@@ -125,7 +126,7 @@ func TestFacts(t *testing.T) {
 	}{
 		{
 			name:   "registered with IANA id",
-			data:   Data{State: StateRegistered, Registrar: "MarkMonitor Inc.", RegistrarIANAID: "292", Nameservers: []string{"b", "a"}, Statuses: []string{"active"}},
+			data:   Data{State: StateRegistered, Registrar: "MarkMonitor Inc.", RegistrarIANAID: "292", Nameservers: []string{"b", "a"}, Statuses: []string{"active"}, Expiry: &exp},
 			want:   map[string][]string{"rdap.registered": {"true"}, "rdap.registrar": {"iana:292"}, "rdap.nameservers": {"a", "b"}, "rdap.status": {"active"}},
 			exists: true,
 		},
@@ -152,6 +153,9 @@ func TestFacts(t *testing.T) {
 			f, err := Facts(enc(tt.data))
 			if err != nil {
 				t.Fatal(err)
+			}
+			if tt.data.State == StateRegistered && tt.data.Expiry != nil && f.Meta["rdap.expiry"] != "2027-02-03T04:05:06Z" {
+				t.Errorf("expiry meta = %v", f.Meta)
 			}
 			if f.Exists != tt.exists || f.Absent != tt.absent || len(f.Values) != len(tt.want) {
 				t.Fatalf("facts = %+v", f)

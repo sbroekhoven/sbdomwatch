@@ -252,6 +252,7 @@ defaults:
     candidate: 6h
     third-party: 6h
   candidate_ttl: 2160h      # 90 days
+  expiry_warning: 720h      # 30 days, owned domains only
 scheduler:
   workers: 8
   tick: 5s

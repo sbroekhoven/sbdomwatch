@@ -15,6 +15,7 @@ defaults:
     candidate: 6h
     third-party: 6h
   candidate_ttl: 2160h   # candidates are archived after 90 days without a notable change
+  expiry_warning: 720h   # owned domains: warn 30 days before the registration expires
 scheduler:
   workers: 8      # watches checked concurrently
   tick: 5s        # how often to look for due watches

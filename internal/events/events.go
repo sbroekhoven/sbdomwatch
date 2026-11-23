@@ -58,6 +58,14 @@ type Payload struct {
 	// registrar and nameservers of a registered event.
 	Details []diff.Change `json:"details,omitempty"`
 
+	// Expiry is set for expiring.
+	Expiry *time.Time `json:"expiry,omitempty"`
+
+	// BaselineConfirmed tells whether a person confirmed the baseline of
+	// an owned domain; changes against an unconfirmed baseline deserve a
+	// second look.
+	BaselineConfirmed bool `json:"baseline_confirmed,omitempty"`
+
 	// Inventory and VolatileFields are set for baseline_complete.
 	Inventory      map[string][]string `json:"inventory,omitempty"`
 	VolatileFields []string            `json:"volatile_fields,omitempty"`
@@ -130,6 +138,9 @@ const (
 	PathNameservers = "rdap.nameservers" // delegation at the registry
 	PathDNSNS       = "dns.NS"
 	PathDNSMX       = "dns.MX"
+	PathDangling    = "dns.dangling" // CNAME target that does not resolve
+	PathDNSA        = "dns.A"
+	PathDNSAAAA     = "dns.AAAA"
 )
 
 // ForChange maps a diff change to an event type and severity. owned raises
@@ -143,6 +154,11 @@ func ForChange(c diff.Change, owned bool) (Type, Severity) {
 		return Dropped, Medium
 	case c.Path == PathRegistrar && c.Kind == diff.Changed:
 		return RegistrarChanged, High
+	case c.Path == PathDangling && c.Kind != diff.Removed:
+		if owned {
+			return DanglingCNAME, High
+		}
+		return DanglingCNAME, Medium
 	case c.Path == PathDNSMX && c.Kind == diff.Added:
 		return MXAppeared, High
 	case (c.Path == PathDNSNS || c.Path == PathNameservers) && c.Kind != diff.Added:

@@ -12,8 +12,10 @@ import (
 
 // LifecycleConfig tunes baselining and debounce.
 type LifecycleConfig struct {
-	BaselineObservations int // observations needed to complete a baseline
-	Debounce             int // consecutive observations before a change is reported
+	BaselineObservations int           // observations needed to complete a baseline
+	Debounce             int           // consecutive observations before a change is reported
+	ExpiryWarning        time.Duration // owned: warn this long before the registration expires; 0 disables
+	CandidateTTL         time.Duration // a change event extends an expiring candidate by this much
 }
 
 // Outcome is the result of feeding one round of facts to a watch.
@@ -75,15 +77,29 @@ func Observe(w Watch, st diff.State, facts diff.Facts, cfg LifecycleConfig, now 
 			Immediate: registering(st, facts),
 		})
 		owned := w.Template == TemplateOwned
-		changes, folded := foldRegistration(changes)
+		changes, foldedReg := foldRegistration(changes)
+		changes, foldedDangling := foldDangling(changes)
 		for _, c := range changes {
 			typ, sev := events.ForChange(c, owned)
 			p := payload(w)
 			p.Change = &c
-			if c.Path == events.PathRegistered {
-				p.Details = folded
+			switch c.Path {
+			case events.PathRegistered:
+				p.Details = foldedReg
+			case events.PathDangling:
+				p.Details = foldedDangling
 			}
 			out.Events = append(out.Events, events.Event{Type: typ, Severity: sev, OccurredAt: now, Payload: p})
+		}
+		if len(out.Events) > 0 && w.ExpiresAt != nil && cfg.CandidateTTL > 0 {
+			exp := now.Add(cfg.CandidateTTL) // a notable change keeps a candidate alive
+			w.ExpiresAt = &exp
+			w.UpdatedAt = now
+		}
+	}
+	if w.State == StateActive {
+		if e, ok := expiring(w, &out.Diff, facts, cfg, now); ok {
+			out.Events = append(out.Events, e)
 		}
 	}
 	out.Watch = w
@@ -120,8 +136,50 @@ func foldRegistration(changes []diff.Change) (kept, folded []diff.Change) {
 	return kept, folded
 }
 
+// foldDangling moves A and AAAA removals into a dangling_cname event: they
+// are the symptom, the dead CNAME target is the news.
+func foldDangling(changes []diff.Change) (kept, folded []diff.Change) {
+	dangling := slices.ContainsFunc(changes, func(c diff.Change) bool {
+		return c.Path == events.PathDangling && c.Kind != diff.Removed
+	})
+	if !dangling {
+		return changes, nil
+	}
+	for _, c := range changes {
+		if (c.Path == events.PathDNSA || c.Path == events.PathDNSAAAA) && c.Kind == diff.Removed {
+			folded = append(folded, c)
+			continue
+		}
+		kept = append(kept, c)
+	}
+	return kept, folded
+}
+
+const flagExpiring = "expiring"
+
+// expiring warns once per expiry date when an owned domain's registration
+// expires within the warning window. A renewal moves the date and re-arms it.
+func expiring(w Watch, st *diff.State, f diff.Facts, cfg LifecycleConfig, now time.Time) (events.Event, bool) {
+	raw, ok := f.Meta["rdap.expiry"]
+	if w.Template != TemplateOwned || cfg.ExpiryWarning <= 0 || !ok {
+		return events.Event{}, false
+	}
+	exp, err := time.Parse(time.RFC3339, raw)
+	if err != nil || exp.Sub(now) > cfg.ExpiryWarning || st.Flags[flagExpiring] == raw {
+		return events.Event{}, false
+	}
+	if st.Flags == nil {
+		st.Flags = map[string]string{}
+	}
+	st.Flags[flagExpiring] = raw
+	p := payload(w)
+	p.Expiry = &exp
+	return events.Event{Type: events.Expiring, Severity: events.Medium, OccurredAt: now, Payload: p}, true
+}
+
 func payload(w Watch) events.Payload {
-	p := events.Payload{Domain: w.Domain, Template: string(w.Template), Origins: []events.OriginRef{}}
+	p := events.Payload{Domain: w.Domain, Template: string(w.Template), Origins: []events.OriginRef{},
+		BaselineConfirmed: w.BaselineConfirmedAt != nil}
 	for _, o := range w.Origins {
 		p.Origins = append(p.Origins, events.OriginRef{Origin: string(o.Origin), Reason: o.Reason, Reference: o.Reference})
 	}

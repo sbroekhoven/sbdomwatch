@@ -79,6 +79,7 @@ func TestLoad(t *testing.T) {
 		{name: "missing token", env: map[string]string{EnvToken: ""}, wantErr: "SBDOMWATCH_TOKEN must be set"},
 		{name: "short token", env: map[string]string{EnvToken: "short"}, wantErr: "at least 32"},
 		{name: "short candidate ttl", file: "defaults:\n  candidate_ttl: 1h\n", wantErr: "candidate_ttl"},
+		{name: "negative expiry warning", file: "defaults:\n  expiry_warning: -1h\n", wantErr: "expiry_warning"},
 		{name: "bad workers", file: "scheduler:\n  workers: 0\n", wantErr: "scheduler.workers"},
 		{name: "bad tick", file: "scheduler:\n  tick: 10ms\n", wantErr: "scheduler.tick"},
 		{name: "discord url", env: map[string]string{"SBDOMWATCH_DISCORD_WEBHOOK": "https://discord.com/api/webhooks/1/abc"}, check: func(t *testing.T, c Server) {

@@ -69,6 +69,8 @@ func (a *app) serveCmd() *cobra.Command {
 				Lifecycle: watch.LifecycleConfig{
 					BaselineObservations: cfg.Defaults.BaselineObservations,
 					Debounce:             cfg.Defaults.DebounceObservations,
+					ExpiryWarning:        cfg.Defaults.ExpiryWarning,
+					CandidateTTL:         cfg.Defaults.CandidateTTL,
 				},
 				BaselineGap: cfg.Defaults.BaselineGap,
 				Route:       events.Router(sinks),

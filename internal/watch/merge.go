@@ -45,7 +45,7 @@ func Apply(existing *Watch, req AddRequest, actor string, now time.Time, d Defau
 			w.IntervalSec = d.intervalSec(req.Template)
 		}
 		maps.Copy(w.Tags, req.Tags)
-		if w.Template == TemplateCandidate {
+		if Expires(w) {
 			exp := now.Add(d.CandidateTTL)
 			w.ExpiresAt = &exp
 		}
@@ -73,9 +73,9 @@ func Apply(existing *Watch, req AddRequest, actor string, now time.Time, d Defau
 	}
 
 	switch {
-	case w.Template != TemplateCandidate:
+	case !Expires(w):
 		w.ExpiresAt = nil
-	case !hasOrigin:
+	case !hasOrigin || w.ExpiresAt == nil:
 		exp := now.Add(d.CandidateTTL)
 		w.ExpiresAt = &exp
 	}
@@ -93,6 +93,15 @@ func Apply(existing *Watch, req AddRequest, actor string, now time.Time, d Defau
 		w.UpdatedAt = now
 	}
 	return w, false, changed
+}
+
+// Expires reports whether w is archived automatically after a quiet period:
+// candidates do, unless someone added them manually.
+func Expires(w Watch) bool {
+	if w.Template != TemplateCandidate {
+		return false
+	}
+	return !slices.ContainsFunc(w.Origins, func(o Origin) bool { return o.Origin == OriginManual })
 }
 
 // ApplyPatch applies a validated patch. It returns ErrArchived for an

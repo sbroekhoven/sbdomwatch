@@ -192,3 +192,109 @@ func TestDropIsDebounced(t *testing.T) {
 		t.Fatalf("events = %+v", out.Events)
 	}
 }
+
+func TestExpiring(t *testing.T) {
+	cfg := LifecycleConfig{BaselineObservations: 1, Debounce: 2, ExpiryWarning: 30 * 24 * time.Hour}
+	withExpiry := func(exp time.Time) diff.Facts {
+		f := facts("dns.A", []string{"1"})
+		f.Meta = map[string]string{"rdap.expiry": exp.Format(time.RFC3339)}
+		return f
+	}
+	far, near := t0.Add(90*24*time.Hour), t0.Add(10*24*time.Hour)
+	renewed := near.Add(365 * 24 * time.Hour)
+
+	tests := []struct {
+		name     string
+		template Template
+		steps    []diff.Facts
+		want     []int // expiring events per step
+	}{
+		{"owned far away", TemplateOwned, []diff.Facts{withExpiry(far)}, []int{0}},
+		{"owned near: warns once", TemplateOwned, []diff.Facts{withExpiry(near), withExpiry(near), withExpiry(near)}, []int{1, 0, 0}},
+		{"renewal re-arms", TemplateOwned, []diff.Facts{withExpiry(near), withExpiry(renewed), withExpiry(renewed.Add(-360 * 24 * time.Hour))}, []int{1, 0, 1}},
+		{"already expired still warns", TemplateOwned, []diff.Facts{withExpiry(t0.Add(-time.Hour))}, []int{1}},
+		{"candidates are not warned", TemplateCandidate, []diff.Facts{withExpiry(near)}, []int{0}},
+		{"no rdap data", TemplateOwned, []diff.Facts{facts("dns.A", []string{"1"})}, []int{0}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			w := newWatch()
+			w.State, w.Template = StateActive, tt.template
+			st := diff.State{Baseline: map[string][]string{"dns.A": {"1"}}}
+			for i, f := range tt.steps {
+				out := Observe(w, st, f, cfg, t0)
+				w, st = out.Watch, out.Diff
+				n := 0
+				for _, e := range out.Events {
+					if e.Type == events.Expiring {
+						n++
+						if e.Payload.Expiry == nil || e.Severity != events.Medium {
+							t.Errorf("event = %+v", e)
+						}
+					}
+				}
+				if n != tt.want[i] {
+					t.Fatalf("step %d: %d expiring events, want %d", i, n, tt.want[i])
+				}
+			}
+		})
+	}
+}
+
+func TestExpiringRightAfterBaseline(t *testing.T) {
+	f := facts("dns.A", []string{"1"})
+	f.Meta = map[string]string{"rdap.expiry": t0.Add(24 * time.Hour).Format(time.RFC3339)}
+	out := Observe(newWatch(), diff.State{}, f, LifecycleConfig{BaselineObservations: 1, ExpiryWarning: 30 * 24 * time.Hour}, t0)
+	var types []events.Type
+	for _, e := range out.Events {
+		types = append(types, e.Type)
+	}
+	if !slices.Equal(types, []events.Type{events.BaselineComplete, events.Expiring}) {
+		t.Errorf("events = %v", types)
+	}
+}
+
+func TestDanglingCNAME(t *testing.T) {
+	w := newWatch()
+	w.Domain, w.State = "www.example.com", StateActive
+	st := diff.State{Baseline: map[string][]string{"dns.CNAME": {"app.herokudns.com"}, "dns.dangling": {}, "dns.A": {"1.2.3.4"}, "dns.AAAA": {}}}
+	dead := facts("dns.CNAME", []string{"app.herokudns.com"}, "dns.dangling", []string{"app.herokudns.com"}, "dns.A", []string{}, "dns.AAAA", []string{})
+	cfg := LifecycleConfig{Debounce: 1}
+	out := Observe(w, st, dead, cfg, t0)
+	if len(out.Events) != 1 || out.Events[0].Type != events.DanglingCNAME || out.Events[0].Severity != events.High {
+		t.Fatalf("events = %+v, want one dangling_cname (A removal folded)", out.Events)
+	}
+	if d := out.Events[0].Payload.Details; len(d) != 1 || d[0].Path != "dns.A" {
+		t.Errorf("details = %+v", d)
+	}
+}
+
+func TestCandidateChangeExtendsExpiry(t *testing.T) {
+	w := newWatch()
+	w.State, w.Template = StateActive, TemplateCandidate
+	w.Origins = []Origin{{Origin: OriginTyposquat, Reason: "x"}}
+	old := t0.Add(24 * time.Hour)
+	w.ExpiresAt = &old
+	st := diff.State{Baseline: map[string][]string{"dns.MX": {}}}
+	cfg := LifecycleConfig{Debounce: 1, CandidateTTL: 90 * 24 * time.Hour}
+
+	out := Observe(w, st, facts("dns.MX", []string{}), cfg, t0)
+	if !out.Watch.ExpiresAt.Equal(old) {
+		t.Errorf("no change, but expiry moved to %v", out.Watch.ExpiresAt)
+	}
+	out = Observe(w, st, facts("dns.MX", []string{"10 mx"}), cfg, t0)
+	if want := t0.Add(90 * 24 * time.Hour); !out.Watch.ExpiresAt.Equal(want) {
+		t.Errorf("after mx_appeared expiry = %v, want %v", out.Watch.ExpiresAt, want)
+	}
+}
+
+func TestPayloadBaselineConfirmed(t *testing.T) {
+	w := newWatch()
+	w.State = StateActive
+	c := t0
+	w.BaselineConfirmedAt = &c
+	out := Observe(w, diff.State{Baseline: map[string][]string{"dns.MX": {}}}, facts("dns.MX", []string{"10 mx"}), LifecycleConfig{Debounce: 1}, t0)
+	if len(out.Events) != 1 || !out.Events[0].Payload.BaselineConfirmed {
+		t.Errorf("events = %+v", out.Events)
+	}
+}

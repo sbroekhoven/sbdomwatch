@@ -47,5 +47,30 @@ func Facts(data json.RawMessage) (diff.Facts, error) {
 		f.Values["dns."+typ] = diff.Set(vals)
 	}
 	f.Absent = known > 0 && nx == known && known == len(d.Records)
+	if v, ok := dangling(d); ok {
+		f.Values["dns.dangling"] = v
+	}
 	return f, nil
+}
+
+// dangling reports the CNAME target when the name has a CNAME whose target
+// does not exist: A and AAAA (which follow the CNAME) both answer NXDOMAIN.
+// The result is unknown (ok false) when any of the three lookups failed.
+func dangling(d Data) (values []string, ok bool) {
+	cname, okC := d.Records["CNAME"]
+	a, okA := d.Records["A"]
+	aaaa, okAAAA := d.Records["AAAA"]
+	if !okC || cname.Error != "" || cname.Rcode == "" {
+		return nil, false
+	}
+	if cname.Rcode != "NOERROR" || len(cname.Values) == 0 {
+		return []string{}, true
+	}
+	if !okA || !okAAAA || a.Error != "" || aaaa.Error != "" || a.Rcode == "" || aaaa.Rcode == "" {
+		return nil, false
+	}
+	if a.Rcode == "NXDOMAIN" && aaaa.Rcode == "NXDOMAIN" {
+		return []string{cname.Values[0].Value}, true
+	}
+	return []string{}, true
 }

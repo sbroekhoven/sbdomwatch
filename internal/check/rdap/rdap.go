@@ -126,6 +126,9 @@ func Facts(data json.RawMessage) (diff.Facts, error) {
 	switch d.State {
 	case StateRegistered:
 		f.Exists = true
+		if d.Expiry != nil {
+			f.Meta = map[string]string{"rdap.expiry": d.Expiry.UTC().Format(time.RFC3339)}
+		}
 		f.Values["rdap.registered"] = []string{"true"}
 		f.Values["rdap.registrar"] = registrarKey(d)
 		f.Values["rdap.nameservers"] = diff.Set(d.Nameservers)
