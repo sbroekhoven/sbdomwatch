@@ -1,0 +1,23 @@
+services:
+  sbdomwatch:
+    build:
+      context: .
+      args:
+        VERSION: ${SBDOMWATCH_VERSION:-dev}
+    image: sbdomwatch:${SBDOMWATCH_VERSION:-dev}
+    command: ["serve"]
+    restart: unless-stopped
+    env_file:
+      - path: .env              # SBDOMWATCH_TOKEN, SBDOMWATCH_DISCORD_WEBHOOK
+        required: false
+    volumes:
+      - sbdomwatch-data:/data
+      - ./config.yaml:/etc/sbdomwatch/config.yaml:ro
+    ports:
+      - "127.0.0.1:8480:8480"   # reach it through Caddy, never publicly
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+
+volumes:
+  sbdomwatch-data:

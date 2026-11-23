@@ -1,0 +1,20 @@
+# Copy to config.yaml. Secrets never go in this file: set them in the
+# environment or in .env (see .env.example). A secret here is a startup error.
+listen: ":8480"
+db_path: /data/sbdomwatch.db
+resolvers: ["1.1.1.1:53", "9.9.9.9:53"]
+rate_limits:
+  dns_per_sec: 20
+  rdap_per_sec_per_registry: 1
+defaults:
+  baseline_observations: 3
+  baseline_gap: 3m
+  debounce_observations: 2
+  intervals:
+    owned: 1h
+    candidate: 6h
+    third-party: 6h
+sinks:
+  discord:
+    webhook_env: SBDOMWATCH_DISCORD_WEBHOOK   # name of the variable, not the URL
+log_level: info
