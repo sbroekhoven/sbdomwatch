@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/sbroekhoven/sbdomwatch/internal/check"
 	"github.com/sbroekhoven/sbdomwatch/internal/watch"
 )
 
@@ -313,5 +315,72 @@ func TestConcurrentAdds(t *testing.T) {
 	ws, _ := s.ListWatches(ctx, Filter{})
 	if len(ws) != 1 {
 		t.Errorf("got %d watches, want 1", len(ws))
+	}
+}
+
+func TestExpireCandidates(t *testing.T) {
+	s, clock := newStore(t)
+	ctx := t.Context()
+	add(t, s, watch.AddRequest{Domain: "squat.com", Template: watch.TemplateCandidate, Reason: "x", Origin: watch.OriginTyposquat})
+	add(t, s, watch.AddRequest{Domain: "kept.com", Template: watch.TemplateCandidate, Reason: "x", Origin: watch.OriginManual})
+	add(t, s, watch.AddRequest{Domain: "owned.com", Template: watch.TemplateOwned, Reason: "x"})
+
+	if got, err := s.ExpireCandidates(ctx, clock.Now().Add(89*24*time.Hour), "system"); err != nil || len(got) != 0 {
+		t.Fatalf("before TTL: %v, %v", got, err)
+	}
+	got, err := s.ExpireCandidates(ctx, clock.Now().Add(90*24*time.Hour), "system")
+	if err != nil || len(got) != 1 || got[0] != "squat.com" {
+		t.Fatalf("at TTL: %v, %v", got, err)
+	}
+	if w, _ := s.GetWatch(ctx, "squat.com"); w.State != watch.StateArchived {
+		t.Errorf("state = %s", w.State)
+	}
+	if w, _ := s.GetWatch(ctx, "kept.com"); w.State == watch.StateArchived {
+		t.Error("manual candidate expired")
+	}
+	log, _ := s.AuditLog(ctx, 1)
+	if log[0].Action != "watch.expire" || log[0].Actor != "system" {
+		t.Errorf("audit = %+v", log[0])
+	}
+	if got, _ := s.ExpireCandidates(ctx, clock.Now().Add(200*24*time.Hour), "system"); len(got) != 0 {
+		t.Errorf("expired twice: %v", got)
+	}
+}
+
+func TestStaleFilter(t *testing.T) {
+	s, clock := newStore(t)
+	ctx := t.Context()
+	t0 := clock.Now()
+	add(t, s, watch.AddRequest{Domain: "fresh.com", Template: watch.TemplateOwned, Reason: "x"}) // 1h interval
+	add(t, s, watch.AddRequest{Domain: "never.com", Template: watch.TemplateOwned, Reason: "x"})
+	add(t, s, watch.AddRequest{Domain: "paused.com", Template: watch.TemplateOwned, Reason: "x"})
+	yes := true
+	s.PatchWatch(ctx, "paused.com", watch.PatchRequest{Paused: &yes}, "seb")
+	fresh, _ := s.GetWatch(ctx, "fresh.com")
+	at := t0.Add(2 * time.Hour)
+	if err := record(t, s, fresh.ID, []check.Observation{obs(t, at, "1")}, at.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		at   time.Time
+		want []string
+	}{
+		{t0.Add(2*time.Hour + 9*time.Minute), nil},                    // within 2h + 10m of creation
+		{t0.Add(2*time.Hour + 11*time.Minute), []string{"never.com"}}, // never observed, too long
+		{t0.Add(4*time.Hour + 11*time.Minute), []string{"fresh.com", "never.com"}},
+	}
+	for _, tt := range tests {
+		ws, err := s.ListWatches(ctx, Filter{StaleAt: tt.at})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got []string
+		for _, w := range ws {
+			got = append(got, w.Domain)
+		}
+		if strings.Join(got, ",") != strings.Join(tt.want, ",") {
+			t.Errorf("stale at +%v = %v, want %v", tt.at.Sub(t0), got, tt.want)
+		}
 	}
 }

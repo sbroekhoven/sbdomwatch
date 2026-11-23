@@ -16,7 +16,7 @@ import (
 func (a *app) lsCmd() *cobra.Command {
 	var (
 		state, tag, origin string
-		all                bool
+		all, stale         bool
 	)
 	cmd := &cobra.Command{
 		Use:     "ls",
@@ -29,7 +29,7 @@ func (a *app) lsCmd() *cobra.Command {
 				return err
 			}
 			ws, err := c.ListWatches(cmd.Context(), client.ListOptions{
-				State: watch.State(state), Tag: tag, Origin: watch.OriginKind(origin), All: all,
+				State: watch.State(state), Tag: tag, Origin: watch.OriginKind(origin), All: all, Stale: stale,
 			})
 			if err != nil {
 				return err
@@ -38,14 +38,20 @@ func (a *app) lsCmd() *cobra.Command {
 				return writeJSON(a.stdout, ws)
 			}
 			tw := newTable(a.stdout)
-			fmt.Fprintln(tw, "DOMAIN\tSTATE\tTEMPLATE\tINTERVAL\tNEXT CHECK\tORIGINS\tTAGS")
+			fmt.Fprintln(tw, "DOMAIN\tSTATE\tTEMPLATE\tINTERVAL\tLAST SEEN\tNEXT CHECK\tORIGINS\tTAGS")
 			for _, w := range ws {
-				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-					displayDomain(w.Domain), w.State, w.Template,
-					time.Duration(w.IntervalSec)*time.Second, formatTime(w.NextCheckAt),
+				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+					displayDomain(w.Domain), stateLabel(w), w.Template,
+					time.Duration(w.IntervalSec)*time.Second, formatTimePtr(w.LastObservedAt), formatTime(w.NextCheckAt),
 					originKinds(w.Origins), formatTags(w.Tags))
 			}
-			return tw.Flush()
+			if err := tw.Flush(); err != nil {
+				return err
+			}
+			if slices.ContainsFunc(ws, func(w watch.Watch) bool { return stateLabel(w) == "active*" }) {
+				fmt.Fprintln(a.stdout, "* owned domain whose baseline is not confirmed yet: review it, then run sbdomwatch confirm <domain>")
+			}
+			return nil
 		},
 	}
 	fl := cmd.Flags()
@@ -53,6 +59,7 @@ func (a *app) lsCmd() *cobra.Command {
 	fl.StringVar(&tag, "tag", "", "only watches with this tag, key=value")
 	fl.StringVar(&origin, "origin", "", "only watches with this origin")
 	fl.BoolVar(&all, "all", false, "include archived watches")
+	fl.BoolVar(&stale, "stale", false, "only watches not observed for twice their interval (checks failing or scheduler stuck)")
 	return cmd
 }
 
@@ -73,4 +80,12 @@ func formatTags(tags map[string]string) string {
 		return "-"
 	}
 	return strings.Join(parts, ",")
+}
+
+// stateLabel marks owned watches whose baseline nobody has confirmed yet.
+func stateLabel(w watch.Watch) string {
+	if w.Template == watch.TemplateOwned && w.State == watch.StateActive && w.BaselineConfirmedAt == nil {
+		return "active*"
+	}
+	return string(w.State)
 }

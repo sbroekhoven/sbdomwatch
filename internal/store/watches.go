@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/sbroekhoven/sbdomwatch/internal/watch"
 )
@@ -82,6 +83,9 @@ type Filter struct {
 	TagVal  string           //
 	Origin  watch.OriginKind // has at least one origin of this kind
 	Domains []string         // restrict to these domains
+	// StaleAt, when set, keeps only checkable watches that have not been
+	// observed for twice their interval plus 10 minutes at that time.
+	StaleAt time.Time
 }
 
 // ListWatches returns watches ordered by domain.
@@ -104,6 +108,12 @@ func (s *Store) ListWatches(ctx context.Context, f Filter) ([]watch.Watch, error
 	if f.Origin != "" {
 		where = append(where, "EXISTS (SELECT 1 FROM watch_origins o WHERE o.watch_id = w.id AND o.origin = ?)")
 		args = append(args, string(f.Origin))
+	}
+	if !f.StaleAt.IsZero() {
+		b, _ := json.Marshal(CheckableStates)
+		where = append(where, `w.state IN (SELECT value FROM json_each(?))
+			AND unixepoch(COALESCE(w.last_observed_at, w.created_at)) < unixepoch(?) - (2 * w.interval_sec + 600)`)
+		args = append(args, string(b), formatTime(f.StaleAt))
 	}
 	if len(f.Domains) > 0 {
 		b, _ := json.Marshal(f.Domains)
@@ -375,4 +385,32 @@ func nullIfEmpty(s string) any {
 		return nil
 	}
 	return s
+}
+
+// ExpireCandidates archives candidates whose expires_at has passed and
+// that have no manual origin. It returns the archived domains.
+func (s *Store) ExpireCandidates(ctx context.Context, now time.Time, actor string) ([]string, error) {
+	var domains []string
+	err := s.writeTx(ctx, func(tx *sql.Tx) error {
+		ws, err := queryWatches(ctx, tx, selectWatch+` WHERE w.template = ? AND w.state <> ? AND w.expires_at IS NOT NULL AND w.expires_at <= ?`,
+			string(watch.TemplateCandidate), string(watch.StateArchived), formatTime(now))
+		if err != nil {
+			return err
+		}
+		for _, w := range ws {
+			if !watch.Expires(w) {
+				continue
+			}
+			a, _ := watch.Archive(w, now)
+			if _, err := saveWatch(ctx, tx, a); err != nil {
+				return err
+			}
+			if err := audit(ctx, tx, now, actor, "watch.expire", w.ID, map[string]any{"domain": w.Domain, "expires_at": w.ExpiresAt}); err != nil {
+				return err
+			}
+			domains = append(domains, w.Domain)
+		}
+		return nil
+	})
+	return domains, err
 }

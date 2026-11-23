@@ -272,6 +272,8 @@ func TestListFilters(t *testing.T) {
 		{"?origin=bogus", 400, 0},
 		{"?tag=novalue", 400, 0},
 		{"?all=maybe", 400, 0},
+		{"?stale=true", 200, 0},
+		{"?stale=perhaps", 400, 0},
 	}
 	for _, tt := range tests {
 		t.Run(tt.query, func(t *testing.T) {

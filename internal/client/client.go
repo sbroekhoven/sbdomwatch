@@ -83,6 +83,7 @@ type ListOptions struct {
 	Tag    string // key=value
 	Origin watch.OriginKind
 	All    bool
+	Stale  bool // only watches not observed for twice their interval
 }
 
 // ListWatches lists watches.
@@ -99,6 +100,9 @@ func (c *Client) ListWatches(ctx context.Context, o ListOptions) ([]watch.Watch,
 	}
 	if o.All {
 		q.Set("all", "true")
+	}
+	if o.Stale {
+		q.Set("stale", "true")
 	}
 	var out api.ListResponse
 	err := c.do(ctx, http.MethodGet, "/v1/watches", q, nil, &out)

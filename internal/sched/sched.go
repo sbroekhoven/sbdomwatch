@@ -23,6 +23,7 @@ type Store interface {
 	ClaimDue(ctx context.Context, now time.Time, limit int, lease time.Duration) ([]store.Due, error)
 	ApplyCheck(ctx context.Context, watchID int64, process store.ProcessFunc) ([]events.Event, error)
 	Reschedule(ctx context.Context, watchID int64, next time.Time) error
+	ExpireCandidates(ctx context.Context, now time.Time, actor string) ([]string, error)
 }
 
 // Config configures a Scheduler. Zero values get defaults.
@@ -110,6 +111,13 @@ func (s *Scheduler) batchSize() int { return s.cfg.Workers * 4 }
 // RunOnce claims one batch of due watches, checks them and returns how many
 // were claimed. It returns when the whole batch is done.
 func (s *Scheduler) RunOnce(ctx context.Context) (int, error) {
+	expired, err := s.cfg.Store.ExpireCandidates(ctx, s.cfg.Now(), "system")
+	if err != nil {
+		return 0, err
+	}
+	for _, d := range expired {
+		s.cfg.Log.InfoContext(ctx, "candidate expired and archived", "domain", d)
+	}
 	due, err := s.cfg.Store.ClaimDue(ctx, s.cfg.Now(), s.batchSize(), s.cfg.Lease)
 	if err != nil {
 		return 0, err

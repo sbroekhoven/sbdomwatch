@@ -182,6 +182,15 @@ func (s *Server) handleList(w http.ResponseWriter, r *http.Request) {
 		}
 		f.TagKey, f.TagVal = k, val
 	}
+	if v := q.Get("stale"); v != "" {
+		stale, err := strconv.ParseBool(v)
+		if err != nil {
+			ve.Fields = append(ve.Fields, watch.FieldError{Field: "stale", Message: "want true or false"})
+		}
+		if stale {
+			f.StaleAt = s.now()
+		}
+	}
 	if v := q.Get("all"); v != "" {
 		all, err := strconv.ParseBool(v)
 		if err != nil {
