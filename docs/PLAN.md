@@ -61,6 +61,11 @@ Clients create watches through the API. The scheduler runs due checks, the diff 
 - **Scheduler:** picks watches whose `next_check_at` has passed, adaptive interval with jitter, per-upstream rate limits (RDAP per registry, DNS per resolver).
 - **Checks:** a small interface, `Check{Name(); Run(ctx, domain) (Observation, error)}`. v1 has DNS and RDAP; RDAP wraps the existing domping library.
 - **Diff engine:** compares sets, not lists; ignores TTL and ordering; learns volatile fields during baselining; needs 2 to 3 consecutive observations before it emits a change.
+    - Each check turns its data into facts: a field path (`dns.MX`) with a set of values. A lookup that failed is *unknown*: never a change, and it neither advances nor resets the debounce. NXDOMAIN is a known empty set.
+    - A field whose values differ between baseline observations is volatile and ignored completely (for example round-robin A records). A stricter "pool" mode, alerting only on values never seen during baselining, is a candidate for later.
+    - SOA is compared on primary nameserver and contact only; serial and timers change without meaning.
+    - A field first seen after the baseline (for example one that failed throughout baselining) is adopted silently.
+    - The accepted baseline, pending changes and baseline samples live in `watches.diff_state` (JSON, migration 0002).
 - **Event outbox:** events are written to SQLite first and delivered to sinks afterwards, with retries, so nothing is lost when Discord or sbalert is down.
 - **API:** JSON over HTTP with token auth. The CLI is the same binary and only talks to this API.
 - **Clients:** sbsquat, sbcti and manual use add watches, always with a reason; sbalert later subscribes to events.
@@ -103,6 +108,7 @@ CREATE TABLE watches (
   baseline_completed_at TEXT,
   volatile_fields       TEXT NOT NULL DEFAULT '[]',  -- JSON list of field paths to ignore
   tags                  TEXT NOT NULL DEFAULT '{}',  -- JSON map, e.g. {"profile":"degiro"}
+  diff_state            TEXT NOT NULL DEFAULT '{}',  -- diff engine state (migration 0002)
   expires_at            TEXT,            -- candidates only
   created_at            TEXT NOT NULL,
   updated_at            TEXT NOT NULL
@@ -159,7 +165,7 @@ CREATE TABLE audit_log (
 3. `active`: every difference from the baseline becomes an event.
 4. `paused` and `archived`: no checks. Candidates expire to `archived` after 90 days without a notable change; manual watches never expire.
 
-A domain that is not registered baselines after a single observation, and its first registration fires `registered` immediately.
+A domain that is not registered baselines after a single observation, and its first registration fires `registered` immediately. Until RDAP arrives (phase 5), "not registered" means NXDOMAIN for every DNS record type.
 
 **Event types**
 
