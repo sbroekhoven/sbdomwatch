@@ -1,0 +1,212 @@
+name: release
+
+# Two ways to release:
+#   - Actions > release > Run workflow, pick patch, minor or major: the next
+#     version is computed from the latest vX.Y.Z tag, tagged and released.
+#   - push a tag yourself: git tag v1.2.3 && git push origin v1.2.3
+# Either way CI runs first; nothing is tagged or published if it fails.
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: Which part of the version to bump
+        type: choice
+        options: [patch, minor, major]
+        default: patch
+  push:
+    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml
+
+  version:
+    needs: ci
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # push the new tag
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # all tags
+
+      - id: version
+        env:
+          BUMP: ${{ inputs.bump }}
+        run: |
+          set -euo pipefail
+          if [ "$GITHUB_EVENT_NAME" = push ]; then
+            version="$GITHUB_REF_NAME"
+          else
+            if [ "$GITHUB_REF" != refs/heads/main ]; then
+              echo "::error::start a release from main, not $GITHUB_REF"
+              exit 1
+            fi
+            # Only plain vX.Y.Z tags count; a glob would also match v1.0.0-rc1.
+            latest=$(git tag --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -1 || true)
+            latest=${latest:-v0.0.0}
+            IFS=. read -r major minor patch <<<"${latest#v}"
+            case "$BUMP" in
+              major) major=$((major + 1)); minor=0; patch=0 ;;
+              minor) minor=$((minor + 1)); patch=0 ;;
+              patch) patch=$((patch + 1)) ;;
+            esac
+            version="v${major}.${minor}.${patch}"
+            echo "Bumping $latest -> $version ($BUMP)"
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git tag -a "$version" -m "sbdomwatch $version"
+            # Tags pushed with GITHUB_TOKEN do not start workflows, so this
+            # does not trigger a second release run.
+            git push origin "$version"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "### Releasing $version" >> "$GITHUB_STEP_SUMMARY"
+
+  binaries:
+    needs: version
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write    # build provenance
+      attestations: write
+    strategy:
+      matrix:
+        include:
+          - {goos: linux, goarch: amd64}
+          - {goos: linux, goarch: arm64}
+          - {goos: darwin, goarch: amd64}
+          - {goos: darwin, goarch: arm64}
+          - {goos: windows, goarch: amd64}
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.version.outputs.version }}
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Build
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: "0"
+        run: |
+          set -euo pipefail
+          name="sbdomwatch_${VERSION#v}_${GOOS}_${GOARCH}"
+          ext=""; [ "$GOOS" = windows ] && ext=".exe"
+          mkdir -p "build/$name" archives
+          go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" -o "build/$name/sbdomwatch$ext" ./cmd/sbdomwatch
+          cp README.md config.example.yaml .env.example "build/$name/"
+          if [ "$GOOS" = windows ]; then
+            (cd build && zip -qr "../archives/$name.zip" "$name")
+          else
+            tar -czf "archives/$name.tar.gz" -C build "$name"
+          fi
+          ls -l archives
+
+      - uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: archives/*
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: binaries-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: archives/*
+          if-no-files-found: error
+
+  container:
+    needs: version
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write    # push to ghcr.io
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.version.outputs.version }}
+
+      - uses: docker/setup-qemu-action@v4 # the runtime stage runs apk for arm64
+      - uses: docker/setup-buildx-action@v4
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=semver,pattern={{version}},value=${{ needs.version.outputs.version }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ needs.version.outputs.version }}
+            type=raw,value=latest
+
+      - id: build
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          build-args: VERSION=${{ needs.version.outputs.version }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          provenance: mode=max
+          sbom: true
+
+      - uses: actions/attest-build-provenance@v4
+        with:
+          subject-name: ghcr.io/${{ github.repository }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+
+  release:
+    needs: [version, binaries, container]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the GitHub release
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: binaries-*
+          path: dist
+          merge-multiple: true
+
+      - name: Checksums
+        working-directory: dist
+        run: sha256sum sbdomwatch_* > checksums.txt && cat checksums.txt
+
+      - name: Create release
+        run: |
+          image="ghcr.io/${GITHUB_REPOSITORY}:${VERSION#v}"
+          cat > notes.md <<EOF
+          Container image: \`docker pull ${image}\` (linux/amd64, linux/arm64)
+
+          Verify a download: \`gh attestation verify <file> --repo ${GITHUB_REPOSITORY}\`
+          EOF
+          gh release create "$VERSION" dist/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "sbdomwatch $VERSION" \
+            --notes-file notes.md \
+            --generate-notes \
+            --verify-tag
