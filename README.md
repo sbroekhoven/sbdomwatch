@@ -99,6 +99,31 @@ curl -s -H "Authorization: Bearer $SBDOMWATCH_TOKEN" -H "X-Actor: sbsquat" \
   http://127.0.0.1:8480/v1/watches
 ```
 
+## AI assistants (MCP and skill)
+
+`sbdomwatch mcp` is an MCP server over stdio for Claude Code, Claude Desktop and
+other MCP clients. It is a client of the API like the CLI (same `--url`,
+`SBDOMWATCH_TOKEN`, `.env`):
+
+```sh
+claude mcp add sbdomwatch -- /path/to/sbdomwatch mcp --env-file /path/to/sbdomwatch/.env
+claude mcp add sbdomwatch -- /path/to/sbdomwatch mcp --env-file /path/to/sbdomwatch/.env --allow-writes
+```
+
+- Read tools: `list_watches`, `get_watch`, `get_history`, `list_events`.
+- `--allow-writes` adds `add_watch`, `update_watch` and `archive_watch`. Hard
+  delete, `confirm` and `rebaseline` are never offered: those stay with a person.
+- Changes show up in the audit log as actor `mcp` (`--actor` to change it).
+- DNS and RDAP values are attacker-controlled (a typosquat picks its own TXT
+  records), so every tool result puts stored data in an `<untrusted-data>`
+  block and tells the model it is data, not instructions.
+
+[`skills/sbdomwatch/SKILL.md`](skills/sbdomwatch/SKILL.md) teaches an assistant
+the templates, origins, lifecycle, event triage and the rules above; it works
+with the MCP tools or the CLI. For Claude Code, copy or link the folder to
+`~/.claude/skills/sbdomwatch` (all projects) or `.claude/skills/sbdomwatch`
+(one project).
+
 ## Configuration
 
 `config.yaml` (see [`config.example.yaml`](config.example.yaml)) holds

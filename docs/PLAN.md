@@ -312,6 +312,8 @@ Six phases, each ending in something you can run and check. Do not start a phase
 
 **After v1, in this order:** sbsquat as the first real client (permutations, then CT), HTTP and TLS checks, extract sbalert, suggestion queue for pivots, small htmx triage UI, AI analyzer.
 
+**Added after v1: AI assistant access.** `sbdomwatch mcp` (official MCP Go SDK, stdio) is a thin API client with read tools always and add/update/archive only with `--allow-writes`; hard delete, `confirm` and `rebaseline` stay with people. Stored data goes out inside `<untrusted-data>` blocks because DNS and RDAP values are attacker-controlled. `skills/sbdomwatch/SKILL.md` covers templates, triage and these rules, for MCP or CLI use.
+
 ## Claude Code prompt
 
 Save this file as `docs/PLAN.md` in an empty `sbdomwatch` repo, then start Claude Code there and paste the prompt below. The working rules also fit well in a `CLAUDE.md` so they apply to every later session.
