@@ -195,6 +195,10 @@ The API is JSON over HTTP under `/v1` with a bearer token (`SBDOMWATCH_TOKEN`, a
 - **Actor:** the `X-Actor` header names who makes a change (`added_by` and the audit log); the CLI sends `$USER`, the default is `api`.
 - **Bulk:** at most 1000 watches per request, all or nothing.
 - **Errors:** `{"error": {"code", "message", "fields": [{"field", "message"}]}}`.
+- **Confirm:** only for owned watches with a completed baseline (409 otherwise); records who and when; event payloads carry `baseline_confirmed`. A rebaseline clears it.
+- **Rebaseline:** takes the latest observation of each check as the baseline, drops pending changes, keeps volatile fields and emits `baseline_complete` with `rebaseline: true`; `{"relearn": true}` restarts baselining from scratch.
+- **Stale:** a checkable watch not observed for twice its interval plus 10 minutes.
+- **Candidate expiry:** checked every scheduler round; a change event or a new origin extends `expires_at`; candidates with a `manual` origin never expire.
 
 | Method and path | Purpose |
 | --- | --- |
