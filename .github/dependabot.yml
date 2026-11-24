@@ -1,0 +1,37 @@
+# Weekly pull requests for outdated dependencies. Minor and patch updates
+# are grouped per ecosystem to keep the noise down; major updates come as
+# separate pull requests because they may need code changes.
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      go-minor-and-patch:
+        update-types: [minor, patch]
+    commit-message:
+      prefix: deps
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      actions-minor-and-patch:
+        update-types: [minor, patch]
+    commit-message:
+      prefix: ci
+
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      base-images:
+        update-types: [minor, patch]
+    commit-message:
+      prefix: docker

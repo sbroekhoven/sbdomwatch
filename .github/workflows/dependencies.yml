@@ -1,0 +1,64 @@
+name: dependencies
+
+# Weekly (and on demand) report of outdated Go modules, plus govulncheck,
+# which fails when the code calls something with a known vulnerability in
+# a module or in the Go standard library. Dependabot (dependabot.yml) opens
+# the update pull requests; this workflow is the overview and the alarm.
+
+on:
+  schedule:
+    - cron: "17 6 * * 1" # Mondays 06:17 UTC
+  workflow_dispatch:
+  pull_request:
+    paths: [go.mod, go.sum]
+
+permissions:
+  contents: read
+
+jobs:
+  outdated:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Outdated Go modules
+        run: |
+          set -euo pipefail
+          # Direct dependencies first; indirect ones are updated with them.
+          go list -m -u -f '{{if and .Update (not .Indirect)}}{{.Path}}|{{.Version}}|{{.Update.Version}}{{end}}' all > direct.txt
+          go list -m -u -f '{{if and .Update .Indirect}}{{.Path}}|{{.Version}}|{{.Update.Version}}{{end}}' all > indirect.txt
+          {
+            echo "## Outdated Go modules"
+            for kind in direct indirect; do
+              file="$kind.txt"
+              echo
+              if [ -s "$file" ]; then
+                echo "### $kind ($(wc -l < "$file"))"
+                echo
+                echo "| Module | Current | Latest |"
+                echo "| --- | --- | --- |"
+                sed 's/|/ | /g; s/^/| /; s/$/ |/' "$file"
+              else
+                echo "### $kind: all up to date"
+              fi
+            done
+            echo
+            echo "Go toolchain in go.mod: \`$(go mod edit -json | jq -r .Go)\`, latest stable: \`$(curl -fsS 'https://go.dev/VERSION?m=text' | head -1)\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+          cat direct.txt indirect.txt
+
+  vulnerabilities:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: govulncheck
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
