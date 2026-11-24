@@ -1,6 +1,6 @@
 module github.com/sbroekhoven/sbdomwatch
 
-go 1.27.1
+go 1.27.4
 
 require (
 	github.com/miekg/dns v1.1.73
