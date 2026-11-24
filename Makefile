@@ -1,8 +1,12 @@
 BINARY  := sbdomwatch
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -s -w -X main.version=$(VERSION)
+STATICCHECK := honnef.co/go/tools/cmd/staticcheck@v0.8.2
 
-.PHONY: all build test vet lint config docker up down clean
+# domping is a private module: fetch it directly from GitHub, not the proxy.
+export GOPRIVATE := github.com/sbroekhoven/*
+
+.PHONY: all build test vet lint config docker up down logs e2e clean
 
 all: lint test build
 
@@ -18,7 +22,7 @@ vet:
 
 lint: vet
 	@unformatted=$$(gofmt -l .); if [ -n "$$unformatted" ]; then echo "gofmt needed:"; echo "$$unformatted"; exit 1; fi
-	@if command -v staticcheck >/dev/null 2>&1; then staticcheck ./...; else echo "staticcheck not installed, skipping"; fi
+	go run $(STATICCHECK) ./...
 
 # Create local config.yaml and .env from the examples if they do not exist,
 # and put a random API token in .env when it has none.
@@ -36,8 +40,19 @@ config:
 docker: config
 	GITHUB_TOKEN=$${GITHUB_TOKEN:-$$(gh auth token)} SBDOMWATCH_VERSION=$(VERSION) docker compose build
 
+# One command from a clean checkout: config and token, build, start, and
+# wait until the container is healthy.
 up: config
-	GITHUB_TOKEN=$${GITHUB_TOKEN:-$$(gh auth token)} SBDOMWATCH_VERSION=$(VERSION) docker compose up --build
+	GITHUB_TOKEN=$${GITHUB_TOKEN:-$$(gh auth token)} SBDOMWATCH_VERSION=$(VERSION) docker compose up --build --detach --wait
+	@echo "sbdomwatch is up on http://127.0.0.1:8480 (make logs, make down)"
+	@echo "CLI in the container: docker compose exec sbdomwatch sbdomwatch ls"
+
+logs:
+	docker compose logs --follow
+
+# The whole flow against the running service, with real DNS and RDAP.
+e2e: up
+	./scripts/e2e.sh
 
 down:
 	docker compose down
