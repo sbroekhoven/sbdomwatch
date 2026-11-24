@@ -38,7 +38,9 @@ step "show, ls, events"
 cli show "$domain"
 cli ls --tag e2e=yes | grep -q "$domain" || fail "ls --tag"
 cli events --since 1h
-cli confirm "$domain" 2>&1 | grep -q 'not complete' || fail "confirm before the baseline was accepted"
+# confirm must fail here (exit 1); capture first, pipefail would see that exit.
+out=$(cli confirm "$domain" 2>&1 || true)
+grep -q 'not complete' <<<"$out" || fail "confirm before the baseline: $out"
 set +e
 cli show not-watched-sbdw-e2e.com >/dev/null 2>&1
 rc=$?
