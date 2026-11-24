@@ -1,15 +1,11 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
-	"strings"
 
 	"github.com/spf13/cobra"
 
-	dnscheck "github.com/sbroekhoven/sbdomwatch/internal/check/dns"
-	rdapcheck "github.com/sbroekhoven/sbdomwatch/internal/check/rdap"
-	"github.com/sbroekhoven/sbdomwatch/internal/store"
+	"github.com/sbroekhoven/sbdomwatch/internal/present"
 )
 
 func (a *app) historyCmd() *cobra.Command {
@@ -41,7 +37,7 @@ func (a *app) historyCmd() *cobra.Command {
 			for i, e := range h.Entries {
 				switch e.Kind {
 				case "observation":
-					fmt.Fprintf(tw, "%s\tobservation\t%s\t%s\t%s\n", formatTime(e.At), e.Check, change(h.Entries, i), summarize(e))
+					fmt.Fprintf(tw, "%s\tobservation\t%s\t%s\t%s\n", formatTime(e.At), e.Check, present.Change(h.Entries, i), present.Observation(e))
 				default:
 					fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t-\n", formatTime(e.At), e.Kind, e.Type, e.Severity)
 				}
@@ -55,70 +51,4 @@ func (a *app) historyCmd() *cobra.Command {
 	cmd.Flags().StringVar(&since, "since", "", "only entries after this: RFC 3339 time, duration (24h) or days (7d)")
 	cmd.Flags().IntVar(&limit, "limit", 50, "maximum number of entries (1-1000)")
 	return cmd
-}
-
-// change compares an observation with the next older one of the same check
-// in the list.
-func change(entries []store.TimelineEntry, i int) string {
-	for _, older := range entries[i+1:] {
-		if older.Kind == "observation" && older.Check == entries[i].Check {
-			if older.Hash == entries[i].Hash {
-				return "same"
-			}
-			return "changed"
-		}
-	}
-	return "first"
-}
-
-// summarize gives a one-line view of an observation's data.
-func summarize(e store.TimelineEntry) string {
-	if e.Check == rdapcheck.Name {
-		return summarizeRDAP(e)
-	}
-	if e.Check != dnscheck.Name {
-		return "hash " + e.Hash[:min(12, len(e.Hash))]
-	}
-	var d dnscheck.Data
-	if err := json.Unmarshal(e.Data, &d); err != nil {
-		return "unreadable data"
-	}
-	var parts []string
-	for _, t := range dnscheck.Types {
-		name := dnscheck.TypeName(t)
-		set, ok := d.Records[name]
-		switch {
-		case !ok:
-			continue
-		case set.Error != "":
-			parts = append(parts, name+":error")
-		case set.Rcode != "" && set.Rcode != "NOERROR":
-			parts = append(parts, name+":"+set.Rcode)
-		case len(set.Values) > 0:
-			parts = append(parts, fmt.Sprintf("%s:%d", name, len(set.Values)))
-		}
-	}
-	if len(parts) == 0 {
-		return "no records"
-	}
-	return strings.Join(parts, " ")
-}
-
-func summarizeRDAP(e store.TimelineEntry) string {
-	var d rdapcheck.Data
-	if err := json.Unmarshal(e.Data, &d); err != nil {
-		return "unreadable data"
-	}
-	if d.State != rdapcheck.StateRegistered {
-		return d.State
-	}
-	parts := []string{"registered"}
-	if d.Registrar != "" {
-		parts = append(parts, d.Registrar)
-	}
-	parts = append(parts, fmt.Sprintf("NS:%d", len(d.Nameservers)))
-	if d.Expiry != nil {
-		parts = append(parts, "expires "+d.Expiry.UTC().Format("2006-01-02"))
-	}
-	return strings.Join(parts, " ")
 }

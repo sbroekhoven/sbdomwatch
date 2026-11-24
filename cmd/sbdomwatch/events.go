@@ -2,12 +2,11 @@ package main
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/spf13/cobra"
 
 	"github.com/sbroekhoven/sbdomwatch/internal/client"
-	"github.com/sbroekhoven/sbdomwatch/internal/events"
+	"github.com/sbroekhoven/sbdomwatch/internal/present"
 )
 
 func (a *app) eventsCmd() *cobra.Command {
@@ -35,7 +34,7 @@ func (a *app) eventsCmd() *cobra.Command {
 			fmt.Fprintln(tw, "TIME\tSEVERITY\tTYPE\tDOMAIN\tDETAIL")
 			for _, e := range evs {
 				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", formatTime(e.OccurredAt), e.Severity, e.Type,
-					displayDomain(e.Payload.Domain), eventDetail(e))
+					displayDomain(e.Payload.Domain), present.EventDetail(e))
 			}
 			if len(evs) == 0 {
 				fmt.Fprintln(tw, "-\t-\t-\t-\tno events")
@@ -50,31 +49,4 @@ func (a *app) eventsCmd() *cobra.Command {
 	fl.StringVar(&o.Severity, "severity", "", "minimum severity: info, medium, high or critical")
 	fl.IntVar(&o.Limit, "limit", 100, "maximum number of events (1-1000)")
 	return cmd
-}
-
-// eventDetail summarizes what an event is about in one line.
-func eventDetail(e events.Event) string {
-	p := e.Payload
-	switch {
-	case p.Change != nil:
-		var parts []string
-		for _, v := range p.Change.Added {
-			parts = append(parts, "+"+v)
-		}
-		for _, v := range p.Change.Removed {
-			parts = append(parts, "-"+v)
-		}
-		s := p.Change.Path + " " + strings.Join(parts, " ")
-		if len(s) > 100 {
-			s = s[:99] + "…"
-		}
-		return s
-	case e.Type == events.BaselineComplete:
-		s := fmt.Sprintf("%d observation(s), %d fields", p.Observations, len(p.Inventory))
-		if len(p.VolatileFields) > 0 {
-			s += ", volatile " + strings.Join(p.VolatileFields, ",")
-		}
-		return s
-	}
-	return "-"
 }
