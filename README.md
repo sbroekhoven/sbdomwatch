@@ -76,6 +76,7 @@ sbdomwatch ls [--state S] [--tag k=v] [--origin O] [--all] [--stale]
 sbdomwatch show <domain>
 sbdomwatch history <domain> [--since 7d] [--limit N]
 sbdomwatch events [--since 24h] [--type T] [--domain D] [--severity high]
+sbdomwatch set <domain> [--interval 6h] [--tag k=v] [--untag k]
 sbdomwatch pause | resume | archive <domain>
 sbdomwatch confirm <domain>                   owned: confirm the baseline after reviewing it
 sbdomwatch rebaseline <domain> [--relearn]    accept the current state as the new baseline

@@ -165,3 +165,42 @@ func writeFile(t *testing.T, path, content string) {
 		t.Fatal(err)
 	}
 }
+
+func TestSetCLI(t *testing.T) {
+	e := newCLIEnv(t)
+	if code, _, errOut := e.run("add", "example.com", "--template", "owned", "--reason", "x", "--tag", "a=1", "--tag", "b=2"); code != 0 {
+		t.Fatal(errOut)
+	}
+	tests := []struct {
+		name       string
+		args       []string
+		wantCode   int
+		wantStdout string
+		wantStderr string
+	}{
+		{"interval", []string{"set", "Example.COM.", "--interval", "6h"}, 0, "example.com: interval 6h0m0s, tags a=1,b=2", ""},
+		{"tags", []string{"set", "example.com", "--tag", "a=9", "--tag", "c=3", "--untag", "b"}, 0, "interval 6h0m0s, tags a=9,c=3", ""},
+		{"nothing to change", []string{"set", "example.com"}, exitUsage, "", "nothing to change"},
+		{"interval too short", []string{"set", "example.com", "--interval", "10s"}, exitUsage, "", "interval_sec"},
+		{"half seconds", []string{"set", "example.com", "--interval", "90500ms"}, exitUsage, "", "whole seconds"},
+		{"set and remove", []string{"set", "example.com", "--tag", "a=1", "--untag", "a"}, exitUsage, "", "both set and removed"},
+		{"bad tag key", []string{"set", "example.com", "--tag", "Bad Key=1"}, exitUsage, "", "key must match"},
+		{"unknown domain", []string{"set", "nope.com", "--interval", "1h"}, exitNotFound, "", "not found"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			code, out, errOut := e.run(tt.args...)
+			if code != tt.wantCode || !strings.Contains(out, tt.wantStdout) || !strings.Contains(errOut, tt.wantStderr) {
+				t.Errorf("code=%d stdout=%q stderr=%q", code, out, errOut)
+			}
+		})
+	}
+	w, _ := e.st.GetWatch(t.Context(), "example.com")
+	if w.IntervalSec != 21600 || w.Tags["a"] != "9" || w.Tags["b"] != "" || w.Tags["c"] != "3" {
+		t.Errorf("stored watch = interval %d tags %v", w.IntervalSec, w.Tags)
+	}
+	log, _ := e.st.AuditLog(t.Context(), 1)
+	if len(log) != 1 || log[0].Action != "watch.update" || log[0].Actor != "seb" {
+		t.Errorf("audit = %+v", log)
+	}
+}

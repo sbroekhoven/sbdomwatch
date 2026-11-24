@@ -53,7 +53,7 @@ func (a *app) rootCmd() *cobra.Command {
 		a.serveCmd(), a.versionCmd(),
 		a.addCmd(), a.importCmd(), a.lsCmd(), a.showCmd(), a.historyCmd(), a.eventsCmd(),
 		a.pauseCmd(), a.resumeCmd(), a.archiveCmd(),
-		a.confirmCmd(), a.rebaselineCmd(),
+		a.confirmCmd(), a.rebaselineCmd(), a.setCmd(),
 	)
 	return root
 }
