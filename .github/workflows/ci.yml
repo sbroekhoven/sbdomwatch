@@ -30,7 +30,9 @@ jobs:
         run: go run honnef.co/go/tools/cmd/staticcheck@v0.8.2 ./...
 
       - name: go test -race
-        run: go test -race ./...
+        # -count=1: always run the tests; setup-go restores the build cache,
+        # which would otherwise replay earlier results for unchanged code.
+        run: go test -race -count=1 ./...
 
       - name: build (static)
         run: CGO_ENABLED=0 go build -trimpath -o /dev/null ./cmd/sbdomwatch
