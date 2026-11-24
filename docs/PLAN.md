@@ -291,8 +291,6 @@ volumes:
 
 **Container image**
 
-domping is a private module, so the image build needs a GitHub token as a BuildKit secret (`github_token`, from `GITHUB_TOKEN`; `make docker` falls back to `gh auth token`). It is only in the environment of the `go mod download` step, never in a layer. Locally, `GOPRIVATE=github.com/sbroekhoven/*` must be set.
-
 Multi-stage build: a `golang` builder compiles a static binary (`CGO_ENABLED=0`, `-trimpath`), and the runtime stage is a pinned `alpine` image with `ca-certificates` and `tzdata`, a non-root `sbdomwatch` user, and `/data` owned by that user. Alpine over distroless because the busybox shell and `wget` allow a Docker `HEALTHCHECK` against `/healthz` and basic debugging with `docker exec`, for a few MB more.
 
 ## Build plan

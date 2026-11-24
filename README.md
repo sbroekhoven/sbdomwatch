@@ -11,8 +11,7 @@ add domains through the API, sbalert will deliver the notifications.
 
 ## Quick start
 
-Needs Docker with Compose, `openssl`, and the GitHub CLI (`gh`) logged in with
-read access to the private `domping` repository.
+Needs Docker with Compose and `openssl`.
 
 ```sh
 make up        # config.yaml + .env with a random token, build, start, wait until healthy
@@ -122,10 +121,7 @@ make lint      # gofmt, go vet, staticcheck
 make build     # static binary in bin/
 ```
 
-`domping` is a private module: set `GOPRIVATE=github.com/sbroekhoven/*` (the
-Makefile does). The Docker build gets a GitHub token as a BuildKit secret from
-`GITHUB_TOKEN` or `gh auth token`; CI uses the repository secret
-`DOMPING_TOKEN`. Unit tests need no network: DNS runs against an in-process
+Unit tests need no network: DNS runs against an in-process
 server, RDAP and webhooks against `httptest`.
 
 Design and build plan: [`docs/PLAN.md`](docs/PLAN.md).

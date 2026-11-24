@@ -8,11 +8,6 @@ on:
 permissions:
   contents: read
 
-env:
-  # domping is private: fetch it from GitHub directly, with DOMPING_TOKEN
-  # (a fine-grained token with read access to sbroekhoven/domping only).
-  GOPRIVATE: github.com/sbroekhoven/*
-
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -22,13 +17,6 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
-
-      - name: Access to private modules
-        env:
-          DOMPING_TOKEN: ${{ secrets.DOMPING_TOKEN }}
-        run: |
-          test -n "$DOMPING_TOKEN" || { echo "::error::repository secret DOMPING_TOKEN is not set"; exit 1; }
-          git config --global url."https://x-access-token:${DOMPING_TOKEN}@github.com/sbroekhoven/".insteadOf "https://github.com/sbroekhoven/"
 
       - name: gofmt
         run: |
@@ -61,5 +49,3 @@ jobs:
           context: .
           push: false
           build-args: VERSION=${{ github.sha }}
-          secrets: |
-            github_token=${{ secrets.DOMPING_TOKEN }}

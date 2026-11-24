@@ -3,9 +3,6 @@ VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -s -w -X main.version=$(VERSION)
 STATICCHECK := honnef.co/go/tools/cmd/staticcheck@v0.8.2
 
-# domping is a private module: fetch it directly from GitHub, not the proxy.
-export GOPRIVATE := github.com/sbroekhoven/*
-
 .PHONY: all build test vet lint config docker up down logs e2e clean
 
 all: lint test build
@@ -35,15 +32,13 @@ config:
 		mv .env.tmp .env && echo "generated SBDOMWATCH_TOKEN in .env"; \
 	fi
 
-# The image build fetches the private domping module with a GitHub token,
-# taken from GITHUB_TOKEN or else from the GitHub CLI.
 docker: config
-	GITHUB_TOKEN=$${GITHUB_TOKEN:-$$(gh auth token)} SBDOMWATCH_VERSION=$(VERSION) docker compose build
+	SBDOMWATCH_VERSION=$(VERSION) docker compose build
 
 # One command from a clean checkout: config and token, build, start, and
 # wait until the container is healthy.
 up: config
-	GITHUB_TOKEN=$${GITHUB_TOKEN:-$$(gh auth token)} SBDOMWATCH_VERSION=$(VERSION) docker compose up --build --detach --wait
+	SBDOMWATCH_VERSION=$(VERSION) docker compose up --build --detach --wait
 	@echo "sbdomwatch is up on http://127.0.0.1:8480 (make logs, make down)"
 	@echo "CLI in the container: docker compose exec sbdomwatch sbdomwatch ls"
 
